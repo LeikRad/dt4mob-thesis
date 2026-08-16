@@ -84,18 +84,20 @@
 
 %%% Edit author's name
 %% Author's full name
-\Author{Primeiro Nome}{Último Nome}
+\Author{Bernardo}{Figueiredo}
 
 %%% Edit thesis title in Portuguese
 %% Thesis Mandatory Title in Portuguese
-\TitlePT{Título da Tese em Português (MÁXIMO 130 CARACTERES)}
+% TODO: draft translation, revisit wording once scope is final
+\TitlePT{Visualização Generalizada de Sistemas de Digital Twin}
 
 %%% OPTIONAL: you can write your thesis title in
 %%%  other languages. You can repeat the following
 %%%  line as many times as you want, or remove it
 %%%  if you only want the portuguese title.
 %% Optional Titles in additional languages.
-\TitleEN{Thesis Title in English (MAX 130 CHARACTERS)}
+% TODO: working title, revisit once scope is final
+\TitleEN{Generalized Viewing of Digital Twin Systems}
 
 %%% Edit your supervisor's information.
 %%%
@@ -118,7 +120,7 @@
 %%% | auxiliar convidado        |
 %%% -----------------------------
 %% Supervisor information
-\Supervisor{(nome do orientador)}{associado}
+\Supervisor{Diogo Gomes}{associado}
 
 %%% OPTIONAL: you can add a second supervisor.
 %%%
@@ -142,13 +144,8 @@
 %%%             for the last enumerated Supervisor; Or
 %%%             nothing {} for all other supervisors 
 %% Optional SecondSupervisor information
-\SupervisorMember{(co-orientador)}{auxiliar convidado}{do Departamento de Matemática}{da Universidade de Aveiro}{}
-
-%%% Repeat the above declaration for additional
-%%%  Supervisor members as many times as necessary.
-%% Additional Supervisor members
-\SupervisoraMember{(co-orientadora)}{associada c/ agregação}{do Departamento de Biologia}{da Universidade de Aveiro}{}
-\SupervisorMember{(co-orientador)}{auxiliar convidado}{do Departamento de Física}{da Universidade de Aveiro}{e }
+% No co-supervisor at the moment.
+%\SupervisorMember{(co-orientador)}{auxiliar convidado}{do Departamento de Matemática}{da Universidade de Aveiro}{}
 
 %%% Edit your degree information.
 %%%
@@ -157,35 +154,29 @@
 %%% title: Degree title (Mestre or Doutor)
 %%% name : Degree name
 %% Degree title and name
-\Degree{Mestre}{Engenharia de Computadores e Telemática}
+\Degree{Mestre}{Desenvolvimento de Jogos Digitais}
 
 %%% OPTIONAL: edit grant support texts where
 %%%  appropriate. Maximum two.
 %%%
 %%% \GrantText{grant1}{grant2}
 %% Optional Grant support texts
-\GrantText{Texto Apoio financeiro do POCTI no âmbito do III Quadro Comunitário de Apoio.\\
-          \newline
-          (if applicable- Portuguese mandatory)}
-          {Texto Apoio financeiro da FCT e do FSE no âmbito do III Quadro Comunitário de Apoio.\\
-          \newline
-          (if applicable- Portuguese mandatory)}
+% No grant support to declare.
+%\GrantText{...}{...}
 
 %%% Edit the Jury President information.
 %% First Member will be the President of the Jury
+% TODO: jury not assigned yet, placeholder to fill in once known
 \JuriMember{Prof. X}{professor associado da Universidade de Aveiro}
 
 %%% Repeat the above declaration for additional
 %%%  members of the jury as many times as necessary.
 %% Additional members of the Jury
-\JuriMember{Prof. X}{professor associado da Universidade de Aveiro}
-\JuriMember{Prof. X}{professor associado da Universidade de Aveiro}
-\JuriMember{Prof. X}{professor associado da Universidade de Aveiro}
-\JuriMember{Prof. X}{professor associado da Universidade de Aveiro}
-\JuriMember{Prof. X}{professor associado da Universidade de Aveiro}
+% TODO: add remaining jury members once known
 
 %%% OPTIONAL: Add an acknowledgement text
 %% Optional Acknowledgement text
+% TODO: write real acknowledgements later
 \Acknowledgements{Agradeço toda a ajuda a todos os meus colegas e companheiros.%
   \\Agradeço a todos os que contribuiram para o modelo de \LaTeX{} usado neste trabalho:\\ \texttt{https://github.com/detiuaveiro/ua-thesis-template}
 }
@@ -196,8 +187,9 @@
 %%% Don't remove the \selectlanguage statement or you will end with incorrect hyphenation
 %%% Don't use commands in the Abstract. Only the \selectlanguage{}, \texttt{}, and \\ commands were configured to be supported. You can configure additional commands in \pdfstringdefDisableCommands
 %% Mandatory Keywords and Abstract in Portuguese
-\Abstract{palavras-chave}{texto livro, arquitetura, história, construção, materiais de construção, saber tradicional.}
-         {resumo}{\selectlanguage{portuguese}Um resumo é um pequeno apanhado de um trabalho mais longo (como uma tese, dissertação ou trabalho de pesquisa). O resumo relata de forma concisa os objetivos e resultados da sua pesquisa, para que os leitores saibam exatamente o que se aborda no seu documento.\\Embora a estrutura possa variar um pouco dependendo da sua área de estudo, o seu resumo deve descrever o propósito do seu trabalho, os métodos que você usou e as conclusões a que chegou.\\Uma maneira comum de estruturar um resumo é usar a estrutura IMRaD. Isso significa: Introdução, Métodos, Resultados, Discussão. Veja mais pormenores aqui:\\\texttt{https://www.scribbr.com/dissertation/abstract/}}
+% TODO: draft, rewrite once results/evaluation chapters exist
+\Abstract{palavras-chave}{gémeo digital, Unreal Engine, visualização 3D, dados geoespaciais, infraestrutura, código aberto.}
+         {resumo}{\selectlanguage{portuguese}Os sistemas de digital twin para infraestruturas físicas são tipicamente desenvolvidos como aplicações fechadas e especializadas, acopladas a um único tipo de infraestrutura e a um único fornecedor de dados. Este trabalho apresenta um visualizador de digital twins de código aberto, construído sobre a Unreal Engine, desenhado para ser generalizável a diferentes tipos de infraestrutura e desacoplado do backend de dados que alimenta a cena. Descreve-se a arquitetura da aplicação, as decisões tomadas ao longo do desenvolvimento para alcançar essa generalização e desacoplamento, e os resultados obtidos.\\Este documento não incide sobre o Eclipse Ditto, backend usado para validar o visualizador durante o desenvolvimento, que é objeto de outros trabalhos.}}
 
 %%% OPTIONAL: you can write the keywords and
 %%%  abstract in other languages. You can repeat
@@ -207,11 +199,13 @@
 %%% Don't use commands in the Abstract. Only the \selectlanguage{}, \texttt{}, and \\ commands were configured to be supported. You can configure additional commands in \pdfstringdefDisableCommands
 %%% You can modify the language to any other supported by Latex
 %% Optional Keywords and Abstract in additional languages.
-\Abstract{keywords}{textbook, architecture, history, construction, construction materials, traditional knowledge.}
-         {abstract}{\selectlanguage{english}An abstract is a short summary of a longer work (such as a thesis, dissertation or research paper).\\The abstract concisely reports the aims and outcomes of your research, so that readers know exactly what your paper is about.\\Although the structure may vary slightly depending on your discipline, your abstract should describe the purpose of your work, the methods you’ve used, and the conclusions you’ve drawn.\\One common way to structure your abstract is to use the IMRaD structure. This stands for: Introduction, Methods, Results, Discussion. Check for more details here:\\\texttt{https://www.scribbr.com/dissertation/abstract/}}
+% TODO: draft, rewrite once results/evaluation chapters exist
+\Abstract{keywords}{digital twin, Unreal Engine, 3D visualization, geospatial data, infrastructure, open source.}
+         {abstract}{\selectlanguage{english}Digital twin systems for physical infrastructure are typically built as closed, purpose-specific applications, tightly coupled to a single infrastructure type and a single data backend. This work presents an open-source digital twin viewer built on Unreal Engine, designed to generalize across different infrastructure types and to be decoupled from the data backend feeding the scene. The application's architecture is described, along with the decisions made throughout development to achieve this generalization and decoupling, and the results obtained.\\This document does not focus on Eclipse Ditto, the backend used to validate the viewer during development, which is the subject of other work.}}
 
 
 %%% OPTIONAL: Acknowledge the use of AI Tools
+% TODO: word this for real before submission
 \AIUse{I acknowledge the use of [insert AI system(s) and link] to [specific use of generative artificial intelligence or other tasks]. I acknowledge the use of [software, codes or platforms] to [specific use software, codes or platforms or to other tasks].
 \newline\newline
 Example 1: I acknowledge the use of ChatGPT 3.5 (Open AI, https://chat.openai.com) to summarise the initial notes and to proofread the final draft and the use of Office365 (Microsoft, https://www.office.com) for text writing and productivity.
@@ -373,7 +367,7 @@ Example 2: No content generated by AI technologies has been used in this Thesis.
 %%%  declaration). If you're writing your thesis
 %%%  in english uncomment the following line.
 %%% Set the proper language or you will end with incorrect hyphenation!
-%\selectlanguage{english}
+\selectlanguage{english}
 
 
 %% COVER PAGES
