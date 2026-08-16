@@ -1,0 +1,33 @@
+\chapter{Implementation}
+\label{chap:implementation}
+
+% TODO: draft, expand with code listings/commits
+\begin{introduction}
+This chapter walks through the concrete implementation decisions made throughout development to realize the architecture presented in Chapter~\ref{chap:architecture}, using them as case studies of the architecture's generalization and decoupling in practice.
+\end{introduction}
+
+\section{Overview}
+% TODO: frame this chapter as decisions taken while decoupling the viewer
+% from its original backend / infrastructure assumptions
+
+\section{Decoupling the Data Backend}
+% TODO: e.g. moving credentials/config out of hardcoded paths, the
+% DittoSecretsAsset pattern as an example of backend config being pluggable
+% rather than baked in
+
+\section{Entity Streaming and Reliability}
+% TODO: tile-based streaming, serializing concurrent requests, reliability
+% lessons
+
+\section{Camera and Interaction}
+% TODO: RTS/FreeFly camera system, globe alignment, why interaction stays
+% generic across infrastructure types
+
+\section{Special-Case Handling}
+% TODO: how infrastructure-specific behavior (e.g. fire/simulation exclusion
+% polygons) is isolated from the generic core rather than special-cased
+% throughout
+
+\section{Discussion}
+% TODO: reflect on which decisions generalized well vs. which introduced
+% complexity, setting up the evaluation in Chapter~\ref{chap:evaluation}

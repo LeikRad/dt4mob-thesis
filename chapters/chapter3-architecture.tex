@@ -1,0 +1,29 @@
+\chapter{Architecture}
+\label{chap:architecture}
+
+% TODO: draft, expand with diagrams
+\begin{introduction}
+This chapter presents the high-level architecture of the digital twin viewer, focusing on the design choices that make it generalizable across infrastructure types and decoupled from any single data backend.
+\end{introduction}
+
+\section{Overview}
+% TODO: high-level component diagram — service layer, entity model,
+% coordinate conversion, camera/interaction layer, UI
+
+\section{Service Layer}
+% TODO: GameInstance subsystem services as the boundary between the app and
+% external data sources; why this boundary enables backend-agnosticism
+
+\section{Entity Model and Generalization}
+% TODO: entity struct schemas + factory pattern (thing-type -> struct
+% mapping) as the mechanism for supporting arbitrary infrastructure types
+% without touching core rendering/interaction code
+
+\section{Geospatial Placement}
+% TODO: coordinate conversion service, why all placement goes through one
+% seam rather than being scattered across actors
+
+\section{Design Rationale}
+% TODO: articulate the architectural principle underlying the above
+% (decoupling data model from rendering, rendering from backend) and how it
+% differs from the closed/coupled systems surveyed in Chapter~\ref{chap:state-of-the-art}
