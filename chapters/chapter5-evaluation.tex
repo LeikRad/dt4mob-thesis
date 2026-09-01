@@ -1,20 +1,144 @@
 \chapter{Evaluation}
 \label{chap:evaluation}
 
-% TODO: draft, expand once benchmarks are finalized and user testing has run
 \begin{introduction}
-This chapter evaluates the viewer through performance benchmarks and user testing.
+This chapter evaluates the viewer along the two axes set out in Chapter~\ref{chap:introduction}: the performance and scaling of the entity spawning and rendering path (RQ3), assessed with a dedicated benchmark harness, and the usability and coherence of the application for its intended users (RQ4), assessed through a user study. The chapter states the design and methodology of each in full; results are reported as they become available.
 \end{introduction}
 
+\section{Evaluation Overview}
+\label{sec:eval-overview}
+
+The two research questions call for different methods. RQ3 is quantitative and controlled: it asks how spawn time, memory, and frame cost grow as the number of rendered entities increases, and how that growth differs between rendering strategies for a high-cardinality entity type. It is answered with a synthetic benchmark that spawns entities in known quantities under each strategy and records engine-level metrics, isolated from the live backend and from user input. RQ4 is qualitative and situated: it asks whether a person unfamiliar with the underlying data model can use the viewer to accomplish realistic tasks. It is answered with a moderated user study using the real application against a real dataset.
+
 \section{Performance Benchmarks}
-% TODO: sign model spawning benchmark harness and results (each metric
-% averaged over 10 runs per supervisor feedback)
+\label{sec:eval-benchmarks}
+
+\subsection{Rationale and Subject}
+
+The entity type chosen as the benchmark subject is the road sign. Signs are the clearest case of a high-cardinality type: a real road network contains them in the tens of thousands, they share a small number of base geometries (circular and triangular blanks) but differ in their face texture, and they are all rendered with the same simple flat-panel material. This makes them an ideal stress test for the spawning and rendering path and, separately, a clean setting in which to compare mesh and material batching strategies, since the only thing that varies between one sign and another is which texture it shows.
+
+Three strategies are compared, implemented as interchangeable \texttt{USignSpawnStrategy} subclasses:
+
+\begin{description}
+    \item[\textsc{PerSign}] The naive baseline. One fully self-contained, pre-baked mesh with its texture baked in per sign code, placed as an individual static mesh component. No instancing. Expected to lose on both draw calls and on-disk/in-memory size because geometry is duplicated per code.
+    \item[\textsc{PerTexture}] One shared mesh per base shape, but a separate dynamic material instance and a separate Instanced Static Mesh (ISM) component per distinct sign texture, because the engine cannot batch different materials into one ISM. Instance and geometry count match \textsc{AtlasMaterial}, but there are as many components, materials, and draw calls as there are distinct textures.
+    \item[\textsc{AtlasMaterial}] One shared mesh and one shared atlas-textured material per base shape, with every instance of that shape batched into a single ISM. Each instance carries four floats of per-instance custom data (a UV offset and scale) selecting its cell in the packed atlas texture. Two shapes therefore mean two components, two materials, and two draw calls regardless of how many distinct signs are shown.
+\end{description}
+
+\subsection{Harness}
+
+The benchmark is a standalone console-driven harness (\texttt{ASignBenchmarkGameMode}), set as a per-level game-mode override on an otherwise empty level and deliberately kept entirely separate from the Ditto entity pipeline -- its own asset-fetching subsystem, its own on-disk cache -- so that it cannot perturb, or be perturbed by, the production code path. A run is triggered by a console command naming a strategy and an instance count; instances are placed on a regular grid, cycling through the 17 available sign codes. Each run destroys and respawns a fresh root actor so no state leaks between measurements.
+
+For each run the harness records:
+
+\begin{itemize}
+    \item \textbf{prepare time} -- from the first asset request to all assets ready (download from cache, decode, atlas construction);
+    \item \textbf{spawn time} -- from assets-ready to the last instance placed;
+    \item \textbf{instance, component, unique-mesh, unique-material, and unique-texture counts} -- the structural cost of the strategy;
+    \item \textbf{frame timing} -- steady-state GPU and game-thread frame time with the instances in view, from the engine's own statistics.
+\end{itemize}
+
+\subsection{Methodology}
+\label{sec:eval-method}
+
+Per supervisor feedback, every metric is captured over ten runs per configuration and averaged, including metrics that are themselves engine-reported averages (such as mean frame time), so that run-to-run variance from background OS activity and shader compilation is smoothed out. The first run after launch for each strategy is treated as a warm-up and discarded to exclude one-off shader compilation and cache-population costs.
+
+Instance counts of \todo[inline,size=\footnotesize]{fix the sweep: e.g.\ 100, 500, 1000, 5000, 10000, 25000} are swept for each of the three strategies. The benchmark is run on \todo[inline,size=\footnotesize]{specify: CPU, GPU, RAM, OS, UE version, build configuration (Development vs Shipping), resolution, VSync off}.
+
+\paragraph{Threat to validity: texture representativeness.} The harness decodes sign textures into uncompressed, single-mip transient textures rather than the block-compressed, mip-mapped, streamed textures a cooked build would use. Absolute memory figures are therefore not production-representative. This affects all three strategies identically, so the \emph{comparison} between them remains valid; only the absolute memory axis should be read with this caveat. \todo[inline,size=\footnotesize]{Optionally re-run \textsc{AtlasMaterial} vs \textsc{PerTexture} with cooked BC-compressed textures for one instance count to quantify the offset.}
+
+\subsection{Results}
+\label{sec:eval-results}
+
+\todo[inline]{Benchmark results pending the 10-run re-capture (Flow State task: ``Re-run benchmark metrics: average each metric over 10 runs''). Populate Table~\ref{tab:bench-structural}, Table~\ref{tab:bench-timing}, and Figure~\ref{fig:bench-scaling} below.}
+
+\begin{table}[t]
+  \centering
+  \caption[Structural cost per strategy]{Structural cost per strategy at \(N\) instances. Lower is better for all columns.}
+  \label{tab:bench-structural}
+  \begin{tabular}{lrrrr}
+    \hline
+    Strategy & Components & Unique meshes & Unique materials & Draw calls \\
+    \hline
+    \textsc{PerSign}       & --- & --- & --- & --- \\
+    \textsc{PerTexture}    & --- & --- & --- & --- \\
+    \textsc{AtlasMaterial} & --- & --- & --- & --- \\
+    \hline
+  \end{tabular}
+\end{table}
+
+\begin{table}[t]
+  \centering
+  \caption[Timing and memory per strategy]{Prepare time, spawn time, steady-state frame time, and resident memory per strategy, averaged over ten runs (warm-up discarded).}
+  \label{tab:bench-timing}
+  \begin{tabular}{lrrrr}
+    \hline
+    Strategy & Prepare (s) & Spawn (s) & Frame (ms) & Memory (MiB) \\
+    \hline
+    \textsc{PerSign}       & --- & --- & --- & --- \\
+    \textsc{PerTexture}    & --- & --- & --- & --- \\
+    \textsc{AtlasMaterial} & --- & --- & --- & --- \\
+    \hline
+  \end{tabular}
+\end{table}
+
+\begin{figure}[t]
+  \centering
+  \missingfigure[figwidth=0.8\textwidth]{Spawn time and steady-state frame time versus instance count, one line per strategy, log-scaled x axis.}
+  \caption[Scaling with instance count]{Spawn time and frame time as a function of instance count, per strategy.}
+  \label{fig:bench-scaling}
+\end{figure}
+
+\subsection{Discussion of Performance}
+\label{sec:eval-perf-discussion}
+
+\todo[inline]{Write once results exist. Expected shape of the argument: (i) \textsc{AtlasMaterial} should hold frame time near-constant regardless of how many distinct signs are shown, because draw calls are fixed at two; (ii) \textsc{PerTexture} should degrade with the number of distinct textures on screen; (iii) \textsc{PerSign} should be worst on every axis and should be ruled out. Conclude with the recommendation for how a high-cardinality type should be rendered in the viewer, and confirm that the generic spawn path's own overhead is not a factor at any tested count.}
 
 \section{User Testing}
-% TODO: NOT YET RUN. Study design/materials are ready; write this section
-% once the study has been conducted. Likely last section written.
+\label{sec:eval-user-testing}
+
+\todo[inline]{The user study has not yet been conducted. The design below is finalised; the Procedure and Results subsections are to be completed after the sessions are run.}
+
+\subsection{Objectives}
+
+The study assesses whether the viewer is usable and coherent for its intended users -- people who work with road-infrastructure data but are not familiar with the viewer's internal data model -- when carrying out realistic inspection tasks against a real dataset. The specific questions are whether participants can navigate to a location of interest, locate and identify entities, read an entity's details, and understand what they are seeing, without assistance and without prior training on the tool.
+
+\subsection{Participants}
+
+\todo[inline,size=\footnotesize]{Target N (typically 5--8 for formative usability work), recruitment source, relevant background, any screening.}
+
+\subsection{Tasks}
+
+Participants carry out a fixed sequence of tasks with the live application, thinking aloud:
+
+\begin{enumerate}
+    \item navigate from the initial view to a named road segment (tests camera controls, both modes);
+    \item find a specific class of entity in that area -- for example a toll camera or a weather station -- and select it (tests visibility, hover and selection feedback, the entity type filter);
+    \item read a named attribute from the selected entity's detail panel (tests the info panel);
+    \item identify what a highlighted simulated or special entity represents -- a vehicle, or a fire's spread area (tests whether non-infrastructure entities are legible);
+    \item locate an entity by identifier using any means the UI provides.
+\end{enumerate}
+
+\subsection{Measures}
+
+\begin{itemize}
+    \item \textbf{Task success}, scored as complete / completed with difficulty / failed;
+    \item \textbf{Time on task};
+    \item \textbf{Errors and points of confusion}, from observation and think-aloud;
+    \item \textbf{Perceived usability}, via the System Usability Scale administered after the session;
+    \item \textbf{Debrief comments}, from a short semi-structured interview.
+\end{itemize}
+
+\subsection{Procedure}
+
+\todo[inline,size=\footnotesize]{Session length, setup (machine, dataset, starting state), moderation script, consent and data-handling, remote vs in-person.}
+
+\subsection{Results}
+\label{sec:eval-user-results}
+
+\todo[inline]{To be completed after the sessions. Report per-task success and time, the SUS score, and a thematic summary of the observed usability issues, each tagged with the part of the UI it concerns.}
 
 \section{Discussion}
-% TODO: synthesize benchmark + user testing results, relate back to the
-% generalization/decoupling claims from Chapters~\ref{chap:architecture}
-% and~\ref{chap:implementation}
+\label{sec:eval-discussion}
+
+\todo[inline]{Synthesise both parts once results exist. The intended throughline: the performance results speak to whether the \emph{generic} entity path can carry a realistic scene (RQ3) -- if atlas-style batching keeps a high-cardinality type tractable and the per-type indirection costs nothing measurable, the generalisation in Chapter~\ref{chap:architecture} is not paid for in performance. The user-study results speak to whether a viewer built to be generic over its data still presents a coherent, specific experience to someone exploring one dataset (RQ4). Relate any usability issues back to whether they stem from the decoupled design or are independent of it.}

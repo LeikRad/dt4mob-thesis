@@ -1,23 +1,58 @@
 \chapter{Conclusions}
 \label{chap:conclusions}
 
-% TODO: draft, write last once all other chapters are done
 \begin{introduction}
-This chapter summarizes the contributions of this thesis and discusses its limitations and future work.
+This chapter revisits the research questions in the light of the work presented, summarises the contributions, sets out the limitations of the current system honestly, and describes the future work that follows most directly from it -- including the viewer's intended release as open-source tooling for other researchers.
 \end{introduction}
 
+\section{Revisiting the Research Questions}
+\label{sec:conc-rqs}
+
+\paragraph{RQ1 -- a single pattern for arbitrary entity types.} This is answered affirmatively. Chapter~\ref{chap:architecture} presented an entity model built on one registration table and two escalating extension points, and Chapter~\ref{chap:implementation} showed that roughly thirty entity types -- static infrastructure, telematics equipment, simulated vehicles, and fire simulations -- are supported through it, with all but one requiring no bespoke code in the generic spawn, update, or rendering paths. The worked example in Section~\ref{sec:impl-worked-example} showed that adding a further type is a two- or three-step change confined to a schema declaration, one table line, and an optional presentation class. The most demanding case, fire, fit the deepest extension point without forcing an exception to it.
+
+\paragraph{RQ2 -- backend independence.} This is answered partially. Backend knowledge is genuinely confined: no code above the service layer names an HTTP verb, a URL, an authentication scheme, or the live-event envelope format, and this can be verified by inspection. What was not done is to factor the service layer behind an abstract interface or to build a second backend or an offline mock. A backend change today is a bounded rewrite of three service classes against their existing public signatures, not a drop-in substitution. The decoupling is architectural and demonstrated by construction, not yet by a working alternative implementation.
+
+\paragraph{RQ3 -- scaling and rendering strategy.} The benchmark harness and methodology are in place (Chapter~\ref{chap:evaluation}); the ten-run measurements are pending and the results sections are marked accordingly. The harness compares three rendering strategies for a high-cardinality type and records spawn time, structural cost, frame timing, and memory across a sweep of instance counts.
+
+\paragraph{RQ4 -- usability.} The user-study design is finalised -- objectives, task set, and measures are specified in Chapter~\ref{chap:evaluation} -- but the sessions have not been conducted, and the results and discussion are pending.
+
 \section{Summary of Contributions}
-% TODO: recap contributions from Chapter~\ref{chap:introduction} in light of
-% the results in Chapter~\ref{chap:evaluation}
+\label{sec:conc-contributions}
+
+The contributions stated in Chapter~\ref{chap:introduction}, as delivered:
+
+\begin{itemize}
+    \item \textbf{An open-source digital twin viewer for mobility infrastructure}, built on Unreal Engine and Cesium for Unreal, that renders roughly thirty entity types on a full-scale globe with live updates, and whose entity model and backend-access layer are isolated behind explicit seams.
+    \item \textbf{An architectural pattern} for generalisation and decoupling in an Unreal Engine application: a service layer of single-purpose \texttt{GameInstanceSubsystem}s that confines all backend contact, and an entity model driven by a registration table with a stateless per-type extension point and a stateful per-instance component point. The pattern is documented through the concrete development decisions that produced it, including the ones that were later revised.
+    \item \textbf{A benchmark harness} for the entity spawning and rendering path, comparing three mesh and material batching strategies for a high-cardinality type, with a defined ten-run averaging methodology (results pending).
+    \item \textbf{A user-study design} for evaluating the viewer with its intended users (sessions pending).
+\end{itemize}
 
 \section{Limitations}
-% TODO
+\label{sec:conc-limitations}
+
+\begin{itemize}
+    \item \textbf{Backend decoupling is confinement, not substitution.} As set out under RQ2 and in Section~\ref{sec:impl-replace-caveat}, \texttt{UDittoService} and its siblings are concrete classes, not interfaces with alternative implementations, and no mock backend exists. The viewer has been validated against exactly one backend.
+    \item \textbf{The tile-streaming loop relies on empirical constants.} Its debounce, hysteresis, and sweep intervals were tuned against observed behaviour rather than derived from an invariant, and its correctness argument is by construction and testing, not proof.
+    \item \textbf{A backend workaround shaped the fetch logic for a time.} The request-serialisation queue (Section~\ref{sec:impl-serialise}) was carried until the backend host was fixed, illustrating that the architecture cannot fully insulate the viewer from backend operational behaviour.
+    \item \textbf{Evaluation is incomplete.} Both the performance results and the user study remain to be carried out; the current document specifies their design but not their outcomes.
+    \item \textbf{Benchmark memory figures are not production-representative}, because the harness uses uncompressed transient textures; the strategy comparison is nonetheless valid (Section~\ref{sec:eval-method}).
+    \item \textbf{Naming debt.} The core world-actor class is still named \texttt{ATempUIActor}, a holdover from an early prototype; it is now the central entity type and the name understates its role.
+\end{itemize}
 
 \section{Future Work}
-% TODO: include the open-source-for-researchers angle here — releasing the
-% viewer as open-source tooling for other researchers/institutions working
-% with digital twins of different infrastructure types, what that enables,
-% what would need to happen next for adoption
+\label{sec:conc-future}
+
 \begin{itemize}
-    \item % TODO
+    \item \textbf{Extract a backend interface and build a mock.} Factoring the service layer behind an abstract interface and providing a mock that replays recorded traffic would turn RQ2's architectural claim into a demonstrated one, and would let the viewer be developed and tested with no live backend at all.
+    \item \textbf{Validate against a second backend.} Pointing the viewer at a different digital twin backend -- or a different Ditto deployment with a different entity schema -- would be the strongest possible evidence for the decoupling.
+    \item \textbf{Replace the tile-loop constants with an invariant.} A cleaner formulation of the streaming loop -- for instance, one driven by an explicit view-frustum-to-tile-set mapping with hysteresis expressed as a single well-defined rule -- would remove the reliance on tuned timings.
+    \item \textbf{Generalise the atlas rendering strategy.} If the benchmark confirms the atlas approach for signs, the same shared-mesh-plus-atlas-plus-per-instance-data technique could be offered as a reusable option for any high-cardinality entity type through the extension point.
+    \item \textbf{Complete the evaluation} -- run the ten-run benchmark capture and the user-study sessions, and fold the results into Chapters~\ref{chap:evaluation} and~\ref{chap:conclusions}.
+    \item \textbf{Release as open-source research tooling.} The viewer is intended for release as open-source software so that other researchers and institutions working with digital twins of different infrastructure types can adopt it as a starting point rather than rebuilding a geospatial viewer from scratch. What this needs next: documentation of the extension points aimed at an external developer, a worked example repository adding a new entity type against a public dataset, a packaged build with the login flow pointed at a configurable backend, and a contribution guide. The architectural work in this thesis is what makes such a release useful -- a viewer that could only ever talk to one backend and show one project's entity types would not be worth adopting.
 \end{itemize}
+
+\section{Closing Remarks}
+\label{sec:conc-closing}
+
+The central claim of this thesis is that a digital twin viewer for physical infrastructure does not have to be a closed, single-purpose application. By confining backend knowledge to a service layer and infrastructure-domain knowledge to a small set of opt-in extension points, the bulk of the viewer -- rendering, interaction, the camera, coordinate placement -- can be written once and left untouched as entity types are added and, in principle, as the backend changes. The development history in Chapter~\ref{chap:implementation} shows this was not free: the boundaries were found by iteration, and one of them had to bend around a backend's transient behaviour before being restored. But the result is a viewer whose cost of change is localised, and which is a plausible basis for reuse beyond the project it was built for.

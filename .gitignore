@@ -96,3 +96,33 @@ oscrypto-ca-bundle.crt
 sftp-config.json
 tags
 tramp
+
+# LaTeX build artifacts (build in-tree; not versioned)
+*.aux
+*.bbl
+*.bcf
+*.blg
+*.fdb_latexmk
+*.fls
+*.lof
+*.log
+*.lot
+*.out
+*.run.xml
+*.synctex.gz
+*.toc
+*.idx
+*.ilg
+*.ind
+*.mw
+*.upa
+*.upb
+*.pdf
+
+# Keep versioned figure assets
+!figs/**
+
+# minted temp files (template still loads minted even though listings is used)
+*.data.minted
+_minted*
+_*.data.minted
