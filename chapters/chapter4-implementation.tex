@@ -2,85 +2,89 @@
 \label{chap:implementation}
 
 \begin{introduction}
-This chapter walks through the concrete implementation decisions made throughout development to realize the architecture presented in Chapter~\ref{chap:architecture}, using them as case studies of the architecture's generalization and decoupling in practice. Each section takes one problem encountered during development, describes how it was solved, and relates the solution back to the seam it belongs to. Where a decision was later revised, that revision is described as well, since the revisions are themselves evidence of where the boundaries did and did not hold.
+This chapter describes how the architecture presented in Chapter~\ref{chap:architecture} is implemented, focusing on the parts of the implementation that show its generalisation and decoupling in practice. Each section covers one concern, describes how the viewer handles it, and relates that solution to the seam it belongs to.
 \end{introduction}
 
 \section{Overview}
 \label{sec:impl-overview}
 
-The viewer did not start out decoupled. Its earliest form assumed a single backend, read its credentials from a checked-in configuration file, spawned a fixed set of actor types with type-specific code in the spawn path, and carried fire-simulation-specific logic in the generic entity code. The structure described in Chapter~\ref{chap:architecture} -- the service layer, the registration table, the two extension points, the coordinate seam -- is the result of a sequence of refactorings, each triggered by a concrete need: a second way of supplying credentials, a new entity type that did not fit the existing pattern, a rendering feature that only one entity type needed.
+The viewer is implemented in Unreal Engine, with the globe provided by Cesium for Unreal. The structure described in Chapter~\ref{chap:architecture}, namely the service layer, the registration table, the two extension points, and the coordinate seam, maps onto a small number of concrete mechanisms in the code. Each exists to meet a specific requirement: keeping credentials and connection details out of source code, streaming a dataset of arbitrary geographic extent, expiring simulated vehicles individually, and accommodating an entity type whose behaviour a table entry alone cannot express.
 
-The sections below follow that sequence. Section~\ref{sec:impl-backend} covers moving backend specifics out of code. Section~\ref{sec:impl-streaming} covers streaming entities by geographic area and the reliability work that entailed. Section~\ref{sec:impl-worked-example} works through adding a new entity type end to end. Section~\ref{sec:impl-camera} covers the camera and interaction layer and why it was unaffected by the entity-side changes. Section~\ref{sec:impl-special} covers the one place genuinely domain-specific behaviour lives, and how it was kept behind the same seam as every other type. Section~\ref{sec:impl-discussion} reflects on which decisions generalised well and which introduced complexity.
+The components of Chapter~\ref{chap:architecture} are implemented as engine-managed services that live for the whole session. The main ones are the backend connection (\texttt{UBackend\-Connection\-Service}), the live-update stream (\texttt{UWSService}), the update router (\texttt{UEntityUpdateDaemon}), and the generic entity (\texttt{ATempUIActor}); the rest of this chapter refers to them by role.
+
+Section~\ref{sec:impl-backend} covers how backend specifics are kept out of the application's code. Section~\ref{sec:impl-streaming} covers streaming entities by geographic area and the measures that keep it reliable. Section~\ref{sec:impl-worked-example} walks through adding a new entity type end to end. Section~\ref{sec:impl-camera} covers the camera and interaction layer and why it is unaffected by changes on the entity side. Section~\ref{sec:impl-special} covers the one place genuinely domain-specific behaviour lives, and how it stays behind the same seam as every other type. Section~\ref{sec:impl-discussion} reflects on which parts of the design generalise well and which introduce complexity.
 
 \section{Decoupling the Data Backend}
 \label{sec:impl-backend}
 
-Three related changes moved knowledge of the backend out of the application's code and into configuration and runtime state.
+Backend knowledge is kept out of the application's code in three complementary ways: connection settings are structured configuration data, credentials are runtime state, and the backend's protocol details sit behind a set of explicit interfaces. The subsections below cover each in turn, followed by what replacing the backend would still require.
 
-\subsection{From a Configuration File to a Data Asset}
+\subsection{Configuration and Credentials as Structured Runtime Data}
 \label{sec:impl-dataasset}
 
-Credentials and connection settings were originally read from a \texttt{Secrets.ini} file, git-ignored, parsed directly wherever they were needed. This had two problems: the file was parsed independently by more than one service, so their interpretations could drift, and configuration was expressed as text to be parsed rather than as structured data.
+Connection settings and credentials are never embedded in source code, and no service parses them from text on its own. Non-secret connection defaults (host, protocol, OAuth client identifier, and the message that starts the event stream) live in a single configuration asset, an engine object edited in the editor and loaded exactly once, when the backend connection starts. There is therefore a single load point and a single structured representation of the configuration, which no two services can interpret differently.
 
-The first step replaced the file with a \texttt{UDittoSecretsAsset} data asset -- a first-class engine object, edited in the editor, loaded exactly once in \texttt{UDittoService::Initialize} from a fixed content path. This made connection settings structured data with a single load point. It is worth being precise about what this did and did not achieve: an early commit described the asset as ``encrypted'', but cooking a data asset into a package does not by itself encrypt it; real protection requires enabling package encryption and AES keys in the project's cryptography settings. The honest description is ``configuration as data, loaded once'', not ``encrypted secrets''.
-
-\subsection{Runtime Credentials and the Startup Sequence}
-\label{sec:impl-auth}
-
-The second step moved credentials out of design-time configuration entirely. In the current design, the data asset holds only non-secret defaults (host, protocol, OAuth client id, the stream-start message) for developer convenience. Real credentials arrive at runtime: the user enters them on a dedicated login screen, and \texttt{UDittoService::Login} performs an OAuth2 password grant against a Keycloak endpoint. \texttt{Initialize} no longer authenticates at all.
-
-The consequence is that authentication is asynchronous relative to the rest of startup, and several components need the result. This is coordinated entirely through delegates and a request queue, shown in Figure~\ref{fig:auth-sequence}: any REST call issued before a token lands is queued inside \texttt{UDittoService} and flushed automatically once it does, and \texttt{UWSService} does not open its socket until \texttt{UDittoService} broadcasts that an authorisation header is available. No caller has to reason about login timing; it either gets a live result or a result that arrives slightly later.
+Real per-user credentials do not live in that asset at all. The user enters them at runtime on a dedicated login screen, and the backend connection performs an OAuth2 password grant against a Keycloak identity server; starting the service never authenticates on its own. As a result, authentication is asynchronous relative to the rest of startup, and several components need the result. This is coordinated entirely through events and a request queue, shown in Figure~\ref{fig:auth-sequence}: any request issued before a token arrives is queued by the backend connection and sent automatically once it does, and the live-update stream does not open its connection until the backend connection announces that authentication is ready. No caller has to reason about login timing; it gets either an immediate result or one that arrives slightly later.
 
 \begin{figure}[t]
   \centering
-  \begin{tikzpicture}[node distance=6mm, every node/.style={font=\small}]
-    \node[block, text width=26mm] (login) {login screen};
-    \node[block, right=14mm of login, text width=30mm] (ditto) {\texttt{UDittoService}};
-    \node[block, right=14mm of ditto, text width=24mm] (kc) {Keycloak};
-    \node[block, below=12mm of ditto, text width=30mm] (ws) {\texttt{UWSService}};
-    \node[block, below=8mm of ws, text width=30mm] (daemon) {\texttt{UEntityUpdateDaemon}};
+  \begin{tikzpicture}[every node/.style={font=\small}]
+    \node[block, text width=20mm] (login) {login screen};
+    \node[block, right=14mm of login, text width=40mm] (ditto) {backend connection};
+    \node[block, right=33mm of ditto, text width=17mm] (kc) {Keycloak};
+    \node[block, below=16mm of ditto, text width=34mm] (ws) {live-update stream};
+    \node[block, below=14mm of ws, text width=34mm] (daemon) {update router};
 
-    \draw[flow] (login) -- node[above,font=\footnotesize]{Login()} (ditto);
-    \draw[flow] (ditto) -- node[above,font=\footnotesize]{password grant} (kc);
-    \draw[flow] (kc) -- node[below,font=\footnotesize]{access + refresh token} (ditto);
-    \draw[flow] (ditto) -- node[right,font=\footnotesize]{OnAuthHeaderReady} (ws);
-    \draw[flow] (ws) -- node[right,font=\footnotesize]{connect + START-SEND-EVENTS} (daemon);
-    \node[right=1mm of ditto.north east, font=\footnotesize\itshape, anchor=south east, yshift=6mm] {queued REST calls flushed on token};
+    \draw[flow] (login) -- node[above,font=\scriptsize]{log in} (ditto);
+    \draw[flow] ([yshift=4pt]ditto.east) -- node[above,font=\scriptsize]{password grant} ([yshift=4pt]kc.west);
+    \draw[flow] ([yshift=-4pt]kc.west) -- node[below,font=\scriptsize]{access + refresh token} ([yshift=-4pt]ditto.east);
+    \draw[flow] (ditto) -- node[right,font=\scriptsize,align=left]{authentication ready} (ws);
+    \draw[flow] (ws) -- node[right,font=\scriptsize,align=left]{connect +\\start event stream} (daemon);
+    \node[font=\scriptsize\itshape, align=right, anchor=north east] at ([xshift=-3mm,yshift=-2mm]ditto.south) {queued requests\\sent on token};
   \end{tikzpicture}
-  \caption[The authentication and startup sequence]{Authentication is asynchronous relative to startup. Components subscribe to \texttt{UDittoService}'s ``header ready'' broadcast; REST calls made before the token arrives are queued and replayed, so no caller handles login timing explicitly.}
+  \caption[The authentication and startup sequence]{Authentication is asynchronous relative to startup. Components wait for the backend connection to announce that authentication is ready; requests made before the token arrives are queued and sent afterwards, so no caller handles login timing explicitly.}
   \label{fig:auth-sequence}
 \end{figure}
 
-Persistence of credentials is handled by a separate subsystem, \texttt{UCredentialStoreService}, backed by platform secure storage (Windows DPAPI or macOS Keychain Services). Only the host, username, and password are persisted; the short-lived OAuth access and refresh tokens are deliberately never written to disk. Instead, a fresh password grant is performed on every launch. This is a deliberate trade: it avoids the failure mode where a persisted refresh token silently goes stale between sessions, at the cost of one extra round-trip at startup, and it means a stored login stays usable until the user explicitly logs out. On a platform with no secure-storage backend implemented, loading simply fails and the login screen is shown every launch -- a graceful degradation rather than an error.
+A separate credential store keeps the login details in platform secure storage (Windows DPAPI or macOS Keychain Services). Only the host, username, and password are stored; the short-lived OAuth access and refresh tokens are deliberately never written to disk. Instead, a fresh password grant is performed on every launch. This is a deliberate trade: it avoids the failure mode where a stored refresh token silently goes stale between sessions, at the cost of one extra round-trip at startup, and it means a stored login stays usable until the user explicitly logs out. On a platform with no secure-storage support implemented, loading fails and the login screen is shown on every launch, a graceful degradation rather than an error.
 
-The login flow is isolated at the level design as well: it runs under its own minimal game mode with no pawn, no world geometry, and no Cesium globe, so none of the tile-streaming machinery starts before the user is authenticated.
+The login flow is also isolated in the scene itself: it runs in its own minimal level with no camera, no world geometry, and no globe, so none of the streaming machinery starts before the user is authenticated.
 
 \subsection{A Single Source of Truth for Connection Settings}
 
-With settings loaded once by \texttt{UDittoService}, the other subsystems that need them read them from its getters rather than loading the asset a second time. \texttt{UWSService} in particular takes its host, protocol, and stream-start message this way. The result is that there is one interpretation of the connection configuration in the running application, and one moment at which the live connection is considered ready, rather than each subsystem arriving at its own.
+With settings loaded once by the backend connection, the other services that need them read them from it rather than loading the configuration a second time; the live-update stream, in particular, takes its host, protocol, and stream-start message this way. The result is one interpretation of the connection configuration in the running application, and one moment when the live connection is considered ready, rather than each service arriving at its own.
+
+\subsection{An Interface Behind the Backend Contact}
+\label{sec:impl-backend-interface}
+
+Backend-specific detail lives only in the backend connection, the live-update stream, and the message decoding of the update router (Section~\ref{sec:service-layer}). Within those three, it sits behind three small interfaces, one per genuinely backend-specific responsibility, so that a second implementation can be written against them. Each currently has exactly one implementation, for Eclipse Ditto.
+
+The REST client interface (\texttt{IBackendRestClient}) covers authentication and access to the backend's records. The backend connection holds one Ditto implementation and forwards its operations, such as logging in, fetching records, and creating a record, to it; the Keycloak token exchange and Ditto's API addresses all live in that implementation. The event subscription interface (\texttt{IBackendEventSubscription}) covers the live connection's protocol: its address, its subprotocol, and the commands that start and stop the event stream. Almost none of the live-update stream is backend-specific, since reconnection, event broadcasting, and sending messages do not vary by backend and stay in the stream itself, so this interface covers only those few protocol details. Finally, the envelope parser interface (\texttt{IBackendEnvelopeParser}) decodes one live-update message into the generic \emph{(identifier, path, value)} triple that the update router routes on. It is the only backend-specific part of the update router (Section~\ref{sec:live-update-path}), and a parser for a different message format can replace it.
+
+Each service keeps its own public operations, events, and lifecycle, and owns its interface implementation the same way the entity model owns extensions and behaviour components: created once, held through a generic interface, with the owner unaware of what the owned object actually does (Section~\ref{sec:entity-model}). Callers use only the service's own operations and never see the interface. This is the same composition pattern applied to a second axis of variation, not a new idea introduced for the backend specifically.
 
 \subsection{What Backend Replacement Would Still Require}
 \label{sec:impl-replace-caveat}
 
-It is important to be precise about the sense in which the backend is ``replaceable''. What has been achieved is \emph{confinement}: no code above the service layer names an HTTP verb, a URL, an OAuth scope, a WebSocket frame, or Ditto's envelope format, so the blast radius of a backend change is one layer. What has \emph{not} been done is to factor \texttt{UDittoService} behind an abstract interface, or to build a second backend implementation or an offline mock. A genuine swap today would mean rewriting the internals of \texttt{UDittoService}, \texttt{UWSService}, and the envelope parser in \texttt{UEntityUpdateDaemon} against the new backend, while keeping their public signatures. That is a bounded, well-localised task -- which is the point of the seam -- but it is not yet a drop-in replacement. This is revisited in Chapter~\ref{chap:conclusions}.
+Because backend-specific detail sits behind the three interfaces above, a backend change means writing one implementation of each and creating it at startup instead of the Ditto one, not rewriting the backend connection, the live-update stream, or the update router. What does \emph{not} yet exist is a second implementation, an offline mock behind the same interfaces, or a runtime or configuration switch between implementations; the Ditto implementation is currently selected directly in the code. This is the same bounded, one-place scope of change that each new entity type needs at the entity-schema level, applied here to the connection itself. Chapter~\ref{chap:conclusions} revisits this alongside the other research questions.
 
 \section{Entity Streaming and Reliability}
 \label{sec:impl-streaming}
 
 \subsection{Streaming Entities by Geographic Area}
 
-Loading every entity in the dataset regardless of where the camera is looking does not scale, and baking in an assumption about dataset size would undermine the goal of generalising across infrastructure of arbitrary extent. Instead, \texttt{ADT4MOBGamemode} maps the camera's altitude to a discrete zoom level and, above a threshold zoom, fetches only the entities within the 3$\times$3 grid of geographic tiles around the camera, expressed as quadkey ranges and queried through \texttt{UDittoService::GetThingsByGeotileBounds}. Below the threshold zoom, tile filtering is disabled and everything loads, since at that range the whole area of interest is on screen anyway. Figure~\ref{fig:tile-flow} shows the per-check decision path.
+Loading every entity in the dataset regardless of where the camera is looking does not scale, and baking in an assumption about dataset size would undermine the goal of generalising across infrastructure of arbitrary extent. Instead, the streaming loop maps the camera's altitude to a discrete zoom level and, above a threshold zoom, fetches only the entities within the 3$\times$3 grid of map tiles around the camera, requested from the backend as ranges of tile keys. Below the threshold zoom, tile filtering is disabled and everything loads, since at that range the whole area of interest is on screen anyway. Figure~\ref{fig:tile-flow} shows the decision path taken at each check.
 
 \begin{figure}[t]
   \centering
   \begin{tikzpicture}[node distance=5mm, every node/.style={font=\small}]
     \node[block, text width=40mm] (raw) {camera $\rightarrow$ lat/lon/alt\\{\footnotesize raw zoom = f(altitude)}};
-    \node[block, below=of raw, text width=52mm] (hyst) {zoom-change hysteresis\\{\footnotesize new zoom must hold ${\sim}2$\,s before it commits}};
+    \node[block, below=of raw, text width=52mm] (hyst) {zoom-change hold\\{\footnotesize new zoom must hold ${\sim}2$\,s before it commits}};
     \node[block, below=of hyst, text width=52mm] (thresh) {zoom $<$ threshold?};
-    \node[block, right=10mm of thresh, text width=34mm] (all) {drop tile filter,\\keep vehicle-exclude filter};
+    \node[block, right=10mm of thresh, text width=34mm] (all) {drop the tile filter};
     \node[block, below=of thresh, text width=52mm] (same) {same 3$\times$3 tile set as loaded?};
     \node[block, below=of same, text width=52mm] (deb) {debounce: camera stable ${\sim}0.75$\,s};
-    \node[block, below=of deb, text width=52mm] (refresh) {refresh only changed tiles\\{\footnotesize fetch new @ each geotile precision; unload gone; protect in-view/open as orphans}};
+    \node[block, below=of deb, text width=52mm] (refresh) {refresh only changed tiles\\{\footnotesize fetch new tiles; unload gone; protect in-view/open as orphans}};
     \draw[flow] (raw) -- (hyst);
     \draw[flow] (hyst) -- (thresh);
     \draw[flow] (thresh) -- node[above,font=\footnotesize]{yes} (all);
@@ -88,119 +92,66 @@ Loading every entity in the dataset regardless of where the camera is looking do
     \draw[flow] (same) -- node[right,font=\footnotesize]{no} (deb);
     \draw[flow] (deb) -- (refresh);
   \end{tikzpicture}
-  \caption[The tile-refresh decision path]{The per-check tile-refresh decision path in \texttt{ADT4MOBGamemode}. Each guard -- hysteresis, threshold, no-op detection, debounce, changed-tiles-only refresh, orphan protection -- was added in response to an observed misbehaviour.}
+  \caption[The tile-refresh decision path]{The tile-refresh decision path taken at each check. Each guard, meaning the zoom-change hold, threshold, no-op detection, debounce, changed-tiles-only refresh, and orphan protection, addresses a specific failure mode, described in the text.}
   \label{fig:tile-flow}
 \end{figure}
 
-Making this stable in the face of a continuously moving camera required several guards, each added in response to an observed misbehaviour:
+Keeping this stable under a continuously moving camera takes several guards, each addressing a specific failure mode. A periodic check, every ${\sim}0.5$\,s rather than every frame, detects when the camera has entered a new tile. A debounce then delays the actual refresh until the camera has held still for ${\sim}0.75$\,s, so sweeping the view across several tiles issues one refresh, not one per tile crossed, and the refresh itself only removes and re-fetches the tiles that actually changed, keeping the ones still in view. Zoom changes need a guard of their own: the zoom level is derived from the camera's altitude by rounding, so an altitude sitting exactly on a zoom boundary would flip between two levels on tiny camera movements, and every flip would rebuild the entire scene. A zoom-change hold therefore requires a new zoom level to persist for ${\sim}2$\,s before it is committed. Finally, entities that are still in view or have an open information window when their tile unloads are kept alive as ``orphans'' and removed later, once they are neither, rather than disappearing from under the user.
 
-\begin{itemize}
-    \item a periodic check (every ${\sim}0.5$\,s, rather than per-frame) detects when the camera has entered a new tile;
-    \item a debounce delays the actual refresh until the camera has held still for ${\sim}0.75$\,s, so sweeping the view across several tiles issues one refresh, not one per tile crossed;
-    \item a refresh only destroys and re-fetches the tiles that actually changed, keeping the ones still in view;
-    \item a zoom-change hysteresis (Listing~\ref{lst:hysteresis}) requires a new zoom level to hold for ${\sim}2$\,s before it is committed, because camera-altitude jitter sitting exactly on a zoom boundary would otherwise oscillate the level, and every flip rebuilds the entire scene;
-    \item entities that are still in view or have an open detail window when their tile unloads are kept alive as ``orphans'' and swept later once they are neither, rather than being destroyed out from under the user.
-\end{itemize}
-
-\begin{lstlisting}[style=cpp,float=tp,caption={[The zoom-change hysteresis guard]The zoom-change hysteresis in \texttt{ADT4MOBGamemode::CheckAndRefreshTiles}. \texttt{AltitudeToZoomLevel} rounds a logarithm, so an altitude on a zoom boundary flips on sub-metre jitter; each flip would run \texttt{DestroyAllActors}.},label={lst:hysteresis}]
-int32 Zoom = RawZoom;
-if (LoadedZoom >= 0 && RawZoom != LoadedZoom)
-{
-    if (RawZoom == CandidateZoom)
-    {
-        ZoomHoldTimer -= DeltaSeconds;
-        if (ZoomHoldTimer > 0.f)
-            Zoom = LoadedZoom;          // not held long enough yet -- stay put
-    }
-    else
-    {
-        CandidateZoom = RawZoom;
-        ZoomHoldTimer = ZoomChangeHoldSeconds;
-        Zoom = LoadedZoom;
-    }
-}
-else { CandidateZoom = -1; }
-\end{lstlisting}
-
-Different data sources in the backend were also found to encode an entity's geotile at different precisions -- simulated vehicles at one zoom, imported static infrastructure at another -- so every tile query is issued at each known precision and the results merged, rather than assuming one encoding.
-
-The live event subscription is scoped to match: when zoomed out past the tile-filtering threshold, individual simulated vehicles are sub-pixel and their high-churn update stream would dominate the WebSocket load for no visible benefit, so the subscription filter excludes that namespace entirely at that range.
-
-\subsection{Serialising Concurrent Tile Requests}
-\label{sec:impl-serialise}
-
-An intermittent failure appeared during this work: \texttt{GetThingsByGeotileBounds} would occasionally log a transport-level failure -- not an HTTP error status, but the request failing to complete at all. It was traced to the refresh logic firing every changed tile's request concurrently in a tight loop, which the backend host handled unreliably under bursts. The fix at the time was to serialise the fetches: a queue held the pending tiles and started each tile's request only from the previous one's completion callback.
-
-This was later removed. The residual flakiness was confirmed to be a server-side problem with the specific backend host, present before this code existed and independent of it, and once the backend was fixed the burst behaviour was no longer an issue and the current code fires the per-tile requests directly again. The episode is a useful case study for Section~\ref{sec:impl-discussion}: a decoupled architecture still has to respect the operational limits of whatever backend sits behind it, and a workaround written against one backend's transient behaviour is itself a form of coupling -- one that had to be carried until the backend changed and then deliberately unwound.
+The live event subscription is scoped to match the tile filter: when zoomed out past the tile-filtering threshold, individual simulated vehicles are smaller than a pixel and their high-frequency updates would dominate the live connection for no visible benefit, so the subscription excludes them entirely at that range, even though the tile filter itself is dropped.
 
 \subsection{Per-Entity Expiry for Simulated Fleets}
 \label{sec:impl-ttl}
 
-Ephemeral entities carry an expiry timestamp. For simulated vehicle fleets, the data source stamps the entire fleet with one shared timestamp, so honouring it literally destroys every vehicle in the same frame when the deadline passes, regardless of which ones are still being simulated. The generic path could not express ``expire these individually''. This is handled through the stateless extension point: the vehicle type's \texttt{UEntityTypeExtension} returns a per-entity staleness timeout (60\,s) instead, so an actor is removed only when no update for that specific entity has arrived within that window, with the timer reset on every message. Entities that genuinely stopped updating are removed, staggered naturally in time; entities still being simulated are not. The same extension also opts the type out of the per-message reflected-struct rebuild (\texttt{NeedsStructSyncOnLiveUpdate}), since a simulated vehicle's position is read straight from its raw JSON and the reflection walk -- a full traversal of the struct per message -- would be pure overhead at that update frequency. Both decisions are visible in Listing~\ref{lst:vehicleext} in the previous chapter.
+Ephemeral entities, such as simulated vehicles, carry an expiry timestamp set by the backend. A group of entities updated at the same time can end up with the same expiry timestamp. The viewer does not remove vehicles by that timestamp directly, because its copy is only as recent as the last message it received: a vehicle that is still active but whose latest update simply arrives late would look expired and be removed. The generic path has no way to express this, so it is handled through the stateless extension point: the vehicle type's extension sets a per-entity staleness timeout (60\,s), so an entity is removed only when no update for that specific entity has arrived within that window, with the timer reset on every message it receives. Vehicles that really stopped updating are removed; vehicles still active, or merely running behind on messages, are not. The same extension also tells the entity not to refresh its typed copy of the data on every message, since a vehicle's position is read directly from its raw data and a full refresh per message would be pure overhead at that update frequency.
 
 \section{Adding an Entity Type: A Worked Example}
 \label{sec:impl-worked-example}
 
-To make the generalisation concrete, consider adding a hypothetical new infrastructure type -- say, an air-quality sensor with a \texttt{thingId} containing \texttt{air-quality} and attributes for the current readings. The full set of changes is:
+To make the generalisation concrete, consider adding a hypothetical new infrastructure type, an air-quality sensor whose identifier contains \texttt{air-quality} and whose attributes hold the current readings. The full set of changes takes two or three steps. The first is to declare a data schema mirroring the sensor's JSON: its latitude, longitude, and the readings. The engine's JSON conversion fills it in from that declaration alone. The second is to add one entry to the registration table, associating the key \texttt{air-quality} with that schema and the display name ``Air Quality Sensor''. The third step is optional: if the default grey badge and empty information panel are not wanted, an extension for the type sets its badge colour, badge label, and default information fields.
 
-\begin{enumerate}
-    \item \textbf{Schema.} Add \texttt{AirQualityStruct.h} with \texttt{USTRUCT}s mirroring the sensor's JSON: a top-level struct with the latitude, longitude, and an \texttt{attributes} sub-struct holding the readings. \texttt{FJsonObjectConverter} handles deserialisation from that declaration alone.
-    \item \textbf{Registration.} Add one line to \texttt{RegisterAllEntityTypes}: \texttt{Factory.RegisterType("air-quality", FAirQualityData::StaticStruct(), TEXT("Air Quality Sensor"), \ldots)}.
-    \item \textbf{(Optional) presentation.} If the default grey badge and empty info panel are not wanted, add a \texttt{UAirQualityExtension} under \texttt{EntityDependencies/AirQuality/} overriding \texttt{GetBadgeColor}, \texttt{GetBadgeLabel}, and \texttt{GetDefaultInfoFields}.
-\end{enumerate}
-
-Nothing else changes. The factory now spawns an \texttt{ATempUIActor} for any matching \texttt{thingId}; the tile-streaming loop fetches it like any other entity; \texttt{UEntityUpdateDaemon} routes its live updates; the actor patches its JSON, updates its position through the coordinate seam, and refreshes the UI; selection, hover, and both camera modes work unmodified. There is no edit to the spawn pipeline, the update loop, the renderer, or the camera. This three-step (often two-step) process is the operational meaning of the generalisation claim in RQ1.
+Nothing else changes. The entity factory now creates a generic entity for any matching identifier; the streaming loop fetches it like any other entity; the update router delivers its live updates; the entity updates its data, moves through the coordinate seam, and refreshes the UI; selection, hover, and both camera modes work unmodified. No changes are required to the creation pipeline, the update loop, the renderer, or the camera. This three-step (often two-step) process is the operational meaning of the generalisation claim in RQ1.
 
 \section{Camera and Interaction}
 \label{sec:impl-camera}
 
-The camera is a single pawn, \texttt{AUnifiedPawn}, with two modes selected by an \texttt{ECameraMode} enum. In the RTS (overhead) mode it holds a fixed downward pitch with a spring arm whose length is the zoom, ranging from roughly $1.5$\,km to planetary distance, and re-aligns itself to the globe's local north and east every tick via \texttt{UpdateRtsAlignment}. In the free-fly mode it collapses the spring arm for full six-degree-of-freedom movement, staying upright relative to the globe surface by querying the local up-vector from the georeference in \texttt{UpdateFreeFlyAlignment}. Both modes' globe alignment is computed by projecting the ECEF north direction onto the local tangent plane.
+The camera is a single controller with two modes. In the overhead (RTS) mode, it looks straight down from a distance that sets the zoom, ranging from roughly $1.5$\,km to planetary distance, and re-aligns itself every frame so that the view stays oriented to local north and east on the globe. In the free-fly mode, it moves freely in all six degrees of freedom, staying upright relative to the globe surface. Both modes compute their alignment from the globe's local north and up directions at the camera's position.
 
-The point worth making about the camera is what it does \textit{not} reference. It queries the globe -- the georeference -- for orientation, and it operates on actors and on the cursor for interaction. It has no knowledge of entity types, of the backend, or of the data model at all. Selection and hover are likewise generic: \texttt{USelectionManager}, a local-player subsystem, broadcasts hover and selection changes, and \texttt{ATempUIActor} responds by toggling custom depth-stencil values on all of its primitive components, with no per-type branching; the HUD widget binds to the same broadcasts to show or hide the entity detail window. This is precisely why the entire camera and interaction layer needed no changes while the entity side was being repeatedly restructured -- it was never coupled to the entity side in the first place.
+The key point about the camera is what it does \emph{not} reference. It queries the globe for orientation, and it operates on entities and on the cursor for interaction. It knows nothing about entity types, the backend, or the data model. Selection and hover are likewise generic: a selection manager announces hover and selection changes, and the generic entity responds by highlighting its meshes, with no per-type branching; the on-screen interface listens to the same announcements to show or hide the entity's information window. As a result, the camera and interaction layer is unaffected by changes on the entity side: adding, removing, or reworking an entity type never touches it.
 
 \section{Special-Case Handling}
 \label{sec:impl-special}
 
-Fire-simulation entities are the one place genuinely infrastructure-specific behaviour exists in the viewer. A fire entity loads two separate multi-mesh models (a spread cone and a simulation body), fetches and parses GeoJSON perimeter geometry, and projects a precise terrain-exclusion polygon onto the globe so the burned area reads correctly against the terrain.
+Fire-simulation entities are the one place genuinely infrastructure-specific behaviour exists in the viewer. A fire entity loads two separate 3D models (a spread cone and a simulation body), fetches and parses the fire's perimeter geometry, and cuts precise areas out of the terrain so that the burned area reads correctly against it.
 
-None of this could be expressed through a table entry or a stateless extension, because it involves live per-instance state: fetched GeoJSON, resolved model URLs, parsed vertex rings. It is therefore implemented as a \texttt{UEntityBehaviorComponent} subclass, \texttt{UFireBehaviorComponent} (Listing~\ref{lst:fire}), returned by the fire type's extension and attached generically by \texttt{ATempUIActor::Initialize} to each fire actor. The actor does not know what the component does; it just knows that some types supply one. The component overrides the two narrow points it needs -- it declares that it handles its own model loading, and it supplies exact exclusion polygons in place of the actor's default behaviour of hulling the visible mesh vertices.
+None of this could be expressed through a table entry or a stateless extension, because it involves live per-instance state: fetched geometry, resolved model locations, parsed polygon outlines. It is therefore implemented as a behaviour component, provided by the fire type's extension and attached by the generic entity to each fire entity when it is created. The entity does not know what the component does; it only knows that some types supply one. The component takes over the two narrow points it needs: it loads its own models, and it supplies exact terrain cut-out areas in place of the entity's default behaviour of deriving one from the outline of its visible model.
 
-\begin{lstlisting}[style=cpp,float=tp,caption={[The fire behaviour component]\texttt{UFireBehaviorComponent}. It is the only entity type that reaches the third rung of the entity model. The generic actor attaches it without knowing what it does.},label={lst:fire}]
-UCLASS()
-class DT4MOB_API UFireBehaviorComponent : public UEntityBehaviorComponent
-{
-    GENERATED_BODY()
-public:
-    virtual void OnEntityInitialized() override;   // load cone/sim GLBs, fetch GeoJSON
-    virtual void OnEntityDataChanged() override;   // re-fetch on live perimeter update
-    virtual bool HandlesOwnModelLoading() const override { return true; }
-    virtual bool GetExclusionPolygons(
-        TMap<FString, TArray<FVector2D>>& OutPolygons) const override;  // "Cone", "Simulation"
-};
-\end{lstlisting}
-
-This section also carries a two-step history that illustrates the generalisation boundary being found in practice, sketched in Figure~\ref{fig:fire-fix}. The first refactoring separated the staged model loads for special-logic entities like fire out of the generic entity-load path, so that the generic path no longer had a fire-shaped branch in it. A later fix addressed a subtler coupling: the fire cone and the simulation exclusion polygon had been mutually exclusive on screen, not by design but as a side effect of sharing a single piece of state -- one \texttt{ACesiumCartographicPolygon} slot. The exclusion mechanism was changed so the behaviour component returns a \emph{map} of named polygons and \texttt{ATempUIActor} spawns one Cesium polygon per entry, so the cone and the simulation area can be shown at once. Both fixes pushed fire-specific behaviour further behind the same seam every other type uses, rather than special-casing it in the factory or the update loop.
+Both keep fire-specific behaviour behind the same seam every other type uses, as sketched in Figure~\ref{fig:fire-fix}. Because the component loads its own models, the generic model-loading path contains no fire-specific branch; the staged loading of the cone and simulation models happens entirely inside the component. The cut-out areas are returned as a \emph{map} of named polygons (the cone and the simulation), and the generic entity creates one terrain cut-out per entry. The entity only iterates the map and does not know what each polygon represents, so the cone and the simulation area can be shown at the same time without any fire-specific code in the entity, the factory, or the update loop.
 
 \begin{figure}[t]
   \centering
-  \begin{tikzpicture}[node distance=7mm, every node/.style={font=\small}]
-    \node[block, text width=44mm] (b1) {\textbf{before}\\{\footnotesize one polygon slot shared}\\cone \emph{xor} simulation visible};
-    \node[block, right=16mm of b1, text width=48mm] (a1) {\textbf{after}\\{\footnotesize \texttt{TMap<FString,TArray<FVector2D>>}}\\one Cesium polygon spawned per entry\\cone \emph{and} simulation visible};
-    \draw[flow] (b1) -- (a1);
+  \begin{tikzpicture}[node distance=12mm, every node/.style={font=\small}]
+    \node[block, text width=48mm] (comp) {fire behaviour component\\{\footnotesize supplies cut-out areas}};
+    \node[block, right=of comp, text width=44mm] (map) {named polygon map\\{\footnotesize cone, simulation}};
+    \node[block, below=8mm of map, text width=44mm] (actor) {generic entity\\{\footnotesize iterates the map}};
+    \node[block, left=of actor, text width=48mm] (polys) {one terrain cut-out per entry\\{\footnotesize cone \emph{and} simulation visible}};
+    \draw[flow] (comp) -- (map);
+    \draw[flow] (map) -- (actor);
+    \draw[flow] (actor) -- (polys);
   \end{tikzpicture}
-  \caption[The exclusion-polygon coupling fix]{Removing an accidental coupling: the cone and simulation areas were mutually exclusive only because they shared one polygon slot. Keying them by name in a map removed the constraint without any change to the generic actor beyond iterating the map.}
+  \caption[Named cut-out areas for fire entities]{How a fire entity's cut-out areas reach the terrain. The behaviour component returns a map of named polygons; the generic entity creates one terrain cut-out per entry without knowing what each represents, so the cone and the simulation area can be visible at once.}
   \label{fig:fire-fix}
 \end{figure}
 
 \section{Discussion}
 \label{sec:impl-discussion}
 
-Some of these decisions generalised cleanly and some introduced complexity that is worth naming.
+Some parts of this design generalise cleanly, and some introduce complexity worth naming.
 
-The registration table plus the two extension points held up well. Every entity type added after the pattern was in place fit one of its three rungs, and the generic spawn, update, and render paths did not need to change to accommodate any of them -- the worked example in Section~\ref{sec:impl-worked-example} is the normal case. The fire component -- the most demanding entity in the system -- fit the stateful-component rung without forcing an exception. The coordinate-conversion seam and the configuration-as-data change were similarly low-cost and paid off immediately, the latter by removing an entire class of ``which service parsed the config'' bug.
+The registration table plus the two extension mechanisms hold up well. Roughly thirty entity types are currently registered: vehicles, weather stations, toll plazas and toll cameras, several classes of road marking, lighting, signs, gantries, kilometre markers, drainage, retaining structures, bridges, four kinds of telematics equipment, generic geo-assets and their instruments, and fire ignition points. All of them fit one of the model's three tiers, and none of them requires a change to the generic creation, update, or rendering paths; the worked example in Section~\ref{sec:impl-worked-example} is the normal case. The fire component, the most demanding entity in the system and the only one with bespoke rendering or update code, fits the stateful-component tier without forcing an exception. The coordinate-conversion seam and the configuration-as-data approach are similarly low-cost, the latter because a single structured configuration leaves no room for two services to interpret the connection settings differently.
 
-The decoupling from the backend is real but partial, as Section~\ref{sec:impl-replace-caveat} sets out: backend knowledge is confined to one layer, but that layer is a concrete implementation, not an interface with alternatives behind it, and no offline mock was built. Backend independence is therefore demonstrated by construction and by inspection -- one can point to every place the backend is named and observe that they are all in the service layer -- rather than by a working substitution.
+Backend independence, discussed in full in Sections~\ref{sec:impl-backend-interface} and~\ref{sec:impl-replace-caveat}, rests on an actual interface rather than only on inspection: three small interfaces isolate authentication and record access, the live-connection protocol, and the message format, each with one implementation. What remains is a second implementation to plug into them, or an offline mock; writing either would not, on its own, make a different backend's data usable without also conforming to its schema, the same work every new entity type already requires. What the seam buys either way is that a backend change stays a bounded rewrite behind a fixed contract instead of spreading through the application.
 
-The tile-streaming loop is where complexity accumulated. Each of its guards -- debounce, changed-tiles-only refresh, zoom hysteresis, orphan sweep, multi-precision geotile queries -- is individually justified by an observed failure, but together they make that loop the most intricate part of the codebase, and its correctness rests on empirically determined constants (hold times, thresholds) rather than on a clean invariant. The request-serialisation workaround, added and then removed, is the clearest example of the architecture being unable to fully insulate itself from backend behaviour: for a period, the viewer's fetch logic was shaped by one host's transient reliability rather than by its own needs.
+The tile-streaming loop is where complexity concentrates. Each of its guards, meaning the debounce, the changed-tiles-only refresh, the zoom-change hold, and the orphan sweep, addresses a specific failure mode. Still, together they make that loop the most intricate part of the codebase.
 
-This sets up the evaluation in Chapter~\ref{chap:evaluation}. The performance benchmarks target the entity spawning and rendering path -- exercised most heavily by high-cardinality types such as signs and simulated vehicles -- to establish how it scales with count and which rendering strategy such a type should use (RQ3); the per-type indirection itself (one map lookup for the extension, one for the schema, per spawn) is negligible by inspection and is not separately measured. The user testing targets the camera and interaction layer, since the question there is whether a layer built to be generic over the data still feels coherent to someone using it to explore a specific dataset (RQ4).
+This sets up the evaluation in Chapter~\ref{chap:evaluation}. The performance benchmarks target the entity creation and rendering path, exercised most heavily by high-cardinality types such as signs and simulated vehicles, to establish both how that path scales with entity count and which mesh and material strategy such a type should adopt to balance rendering cost against the disk space and hosting cost of storing many visually distinct models (RQ3); the per-type indirection itself (one lookup for the extension and one for the schema, per entity created) is negligible by inspection and is not separately measured. The user testing targets the camera and interaction layer, since the question there is whether a layer built to be generic over the data still feels coherent to someone using it to explore a specific dataset, and whether the partner use cases of Section~\ref{sec:usecases} are not just architecturally accommodated (Section~\ref{sec:eval-usecases}) but usable in practice by someone unfamiliar with the underlying data model (RQ4).

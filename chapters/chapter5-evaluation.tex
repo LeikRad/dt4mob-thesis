@@ -2,143 +2,292 @@
 \label{chap:evaluation}
 
 \begin{introduction}
-This chapter evaluates the viewer along the two axes set out in Chapter~\ref{chap:introduction}: the performance and scaling of the entity spawning and rendering path (RQ3), assessed with a dedicated benchmark harness, and the usability and coherence of the application for its intended users (RQ4), assessed through a user study. The chapter states the design and methodology of each in full; results are reported as they become available.
+This chapter first presents the DT4MOB project, within which the viewer was developed, and the five use cases its industry partners brought. It then evaluates the viewer along the three axes set out in Chapter~\ref{chap:introduction}: whether the same architecture accommodates those heterogeneous use cases without type-specific code (RQ1), the performance and scaling of the entity spawning and rendering path (RQ3), assessed with a dedicated benchmark harness, and the usability and coherence of the application for its intended users (RQ4), assessed through a user study. The chapter states the design and methodology of each and reports its results.
 \end{introduction}
+
+\section{The DT4MOB Project}
+\label{sec:dt4mob}
+
+This work was developed within DT4MOB (Digital Twins for Mobility), a project that aims to create dynamic and interoperable digital representations of road infrastructure and mobility systems. It relies on emerging technologies such as 5G communications, edge computing, and artificial intelligence to process data in real time and to distribute intelligence along connected road corridors. Within the project, entity data is modelled and served by an Eclipse Ditto backend (Section~\ref{sec:dt-infrastructure}), and the viewer presented in this thesis is the component through which that data is visualised and explored.
+
+Unlike the vendor platforms of Section~\ref{sec:related-viewer-systems}, DT4MOB brings together several industry partners, each with its own data and operational needs, around the same digital twin. A viewer for such a project cannot be built around one partner's entity types, which is what makes generality a requirement here.
+
+\subsection{Partner Use Cases}
+\label{sec:usecases}
+
+The project was carried out with three industry partners, two road infrastructure operators and a provider of tolling technology, who contributed five use cases from their operational domains, all of which the same viewer was expected to display. These use cases cover a wide range of entity shapes, update cadences, and cardinalities, and they were the concrete requirements behind the architecture presented in Chapter~\ref{chap:architecture}. Every extension point in the entity model exists to serve at least one of these use cases.
+
+\textbf{Geotechnical asset monitoring (road infrastructure operator A).} Retaining walls and slopes along the motorway network are instrumented with inclinometers and load cells that report periodic displacement and load readings, complemented by LiDAR and drone surveys used to detect ground movement over time. Each instrumented asset appears in the viewer as a single entity that carries the state of its individual instruments, colour-coded as \texttt{OK}, \texttt{ALERT}, or \texttt{ALARM} so an operator can tell at a glance which structures need attention, and can drill into an individual asset to see per-instrument readings and history. This case is a largely static entity type (assets do not move), but its visual state changes discretely and must remain legible even when many assets share the scene.
+
+\textbf{Wildfire risk forecasting (road infrastructure operator A).} Ignition events near motorway corridors are run through a fire-spread simulation (ForeFire), driven by terrain, land-cover, and live weather data, to produce a predicted perimeter and an estimated risk to the road. Unlike the geotechnical case, the entity here is entirely simulated: it has no fixed physical counterpart, it is created and destroyed as incidents are opened and resolved, and its visual representation is an irregular, time-varying polygon rather than a point marker, closer in kind to the simulated vehicles of Section~\ref{sec:simulated-entities} than to a physical asset. It shares the simulated-entity concept with the traffic case, but its geometry cannot be represented by a point-based entity model.
+
+\textbf{Traffic circulation and operations (road infrastructure operator B).} Live counts from traffic counters and roadside LiDARs are combined with microsimulation (SUMO) and short-term forecasting models to give operators a predictive view of congestion and incidents across the network. The entities involved are vehicles and traffic-flow indicators at a scale that can reach thousands of moving entities concurrently, whether real or simulated, which requires the entity model to treat entity lifetime, meaning creation, update, and expiry, as a generic capability: each simulated vehicle has to be removed individually once it stops being updated, while the rest of its fleet remains. This scale is also part of why spawning and rendering performance is evaluated directly as its own research question in Section~\ref{sec:eval-benchmarks} (RQ3).
+
+\textbf{Road asset management (road infrastructure operator B).} A second use case with the same partner concerns the wider inventory of road furniture (signage, barriers, pavement sections, and other structures), each carrying inspection history, condition state, and a geographic footprint described as arbitrary polygons or polylines rather than a single point. Assets are added, updated, and eventually retired as inspections occur, using the same generic entity-lifetime handling as the traffic case above. The signage subset of this inventory is the direct source of the benchmark in Section~\ref{sec:eval-benchmarks}: European road signs share a shape within each category but differ enormously in code and face texture, which raises a genuine design question of how to store and render many visually distinct signs cheaply, trading off how easy a new sign is to add against how much disk space and runtime memory hosting the full set costs.
+
+\textbf{Toll operation and autonomous-driving support (tolling technology provider).} Open Road Tolling gantries detect vehicles with LiDAR and camera sensors and report their position, dimensions, and lane at high frequency, both to reconcile tolling charges and to prototype the lane-level vehicle tracking that autonomous-driving support would need. Of all five cases, this has the tightest latency and positional-accuracy requirements: entities are created and destroyed within seconds of each other as vehicles pass through a gantry, and their position must be accurate enough for the operator to attribute a detection to the correct lane. It places the most stress on the streaming and placement paths described in Sections~\ref{sec:entity-model} and~\ref{sec:geospatial-placement}.
+
+Considered collectively, these five cases could not have been served by a viewer hard-coded for any single one: a viewer designed for the geotechnical case would lack support for polygon-shaped, transient entities such as wildfire perimeters, while a viewer focused on vehicle tracking would not address asset condition states or lifecycle expiry.
 
 \section{Evaluation Overview}
 \label{sec:eval-overview}
 
-The two research questions call for different methods. RQ3 is quantitative and controlled: it asks how spawn time, memory, and frame cost grow as the number of rendered entities increases, and how that growth differs between rendering strategies for a high-cardinality entity type. It is answered with a synthetic benchmark that spawns entities in known quantities under each strategy and records engine-level metrics, isolated from the live backend and from user input. RQ4 is qualitative and situated: it asks whether a person unfamiliar with the underlying data model can use the viewer to accomplish realistic tasks. It is answered with a moderated user study using the real application against a real dataset.
+The three questions call for different methods. RQ1 is demonstrative: rather than argue in the abstract that the architecture generalises, Section~\ref{sec:eval-usecases} shows the unmodified viewer rendering each of the five partner use cases from Section~\ref{sec:usecases}. RQ3 is quantitative and controlled: it asks how spawn time, memory, and frame cost grow as the number of rendered entities increases, and how that growth differs between rendering strategies for a high-cardinality entity type. It is answered with a synthetic benchmark that spawns entities in known quantities under each strategy and records engine-level metrics, isolated from the live backend and from user input. RQ4 is qualitative and situated: it asks whether a person unfamiliar with the underlying data model can use the viewer to accomplish realistic tasks. It is answered with a moderated user study with ten participants, using the real application against the live dataset.
+
+\section{Use Case Validation}
+\label{sec:eval-usecases}
+
+The entity types of the five use cases in Section~\ref{sec:usecases} are heterogeneous enough that a viewer hard-coded around any one of them could not have served the rest. This section closes that argument with evidence rather than assertion. For each use case, the viewer is pointed at that partner's data, and the resulting scene is shown, using the entity model and service layer described in Chapter~\ref{chap:architecture} exactly as they stand for every other entity type. No use case in this section requires a change to the generic spawn, update, or rendering path; each is accommodated by describing its entity type through the registration table and, where its visual state or geometry demanded it, one of the two extension points in Section~\ref{sec:entity-model}.
+
+% Use-case figures: each placed after its paragraph and kept inside its own subsection.
+\subsection{Geotechnical Asset Monitoring}
+
+The instrumented asset in Figure~\ref{fig:usecase-geotech} is largely static; its only time-varying property is the discrete alert state of each instrument. Each instrument on the slope is its own entity, so the entity model exposes its attributes and state through the same detail panel used for every other entity type, with no geotechnical-specific interface.
+
+\begin{figure}[!htb]
+  \centering
+  \includegraphics[width=0.85\textwidth]{usecase-geotech-anon.png}
+  \caption[Geotechnical asset monitoring use case]{The instrumented slope and retaining wall in the Lisbon region (road infrastructure operator A), shown as a 3D model. A load cell (A25.1) is selected, and the detail panel shows its attributes, its current state (OK), and a link to the partner's monitoring dashboard.}
+  \label{fig:usecase-geotech}
+\end{figure}
+\FloatBarrier
+
+\subsection{Wildfire Risk Forecasting}
+
+Unlike every physical entity type in the other four use cases, the entity in Figure~\ref{fig:usecase-wildfire} has no fixed real-world counterpart and no single geographic point: it is a simulated, time-varying polygon. This clearly shows that the entity model does not assume a point-marker representation, and that simulated and physical entities can share the same scene and the same generic update path.
+
+\begin{figure}[!htb]
+  \centering
+  \includegraphics[width=0.85\textwidth]{usecase-wildfire.png}
+  \caption[Wildfire risk forecasting use case]{A simulated fire north of Lisbon, created from an ignition point placed in the viewer. Its predicted spread is drawn as nested perimeters over the terrain, next to a motorway, and the detail panel identifies the entity as simulated rather than observed.}
+  \label{fig:usecase-wildfire}
+\end{figure}
+\FloatBarrier
+
+\subsection{Traffic Circulation and Operations}
+
+The vehicles in Figure~\ref{fig:usecase-traffic} are handled by the generic entity-lifetime mechanism of Section~\ref{sec:impl-ttl}, which removes each one individually once it stops being updated. Every one of them, whether real or simulated, is created, updated, and destroyed through the same generic path exercised by the signage benchmark, rather than a path specialised for vehicles.
+
+\begin{figure}[!htb]
+  \centering
+  \includegraphics[width=0.85\textwidth]{usecase-traffic-crop.png}
+  \caption[Traffic circulation use case]{A simulated vehicle on a motorway in the Porto region, produced by the SUMO microsimulation~\cite{lopez2018sumo} and streamed through the backend like any physical entity. The selected car is highlighted, and its detail panel shows its live kinematic attributes (speed, acceleration, heading). Frame from a recording made during development, as the live feed was unavailable when this chapter was written; the interface is unchanged.}
+  \label{fig:usecase-traffic}
+\end{figure}
+\FloatBarrier
+
+\subsection{Road Asset Management}
+
+The assets in Figure~\ref{fig:usecase-assets} are the most varied of the five use cases: a single stretch of road holds more than ten asset types side by side (Figure~\ref{fig:usecase-assets-overview}), all listed, shown, and hidden through the same outline panel. They include the signage subset used as the benchmark subject (Figure~\ref{fig:usecase-assets-detail}) in Section~\ref{sec:eval-benchmarks}, alongside asset types with polygon and polyline footprints rather than a single point. This use case relies on the same generic entity-lifetime handling as the traffic case above, retiring assets as inspections occur without a bespoke path of its own; its signage subset is what raises the storage and rendering-strategy question the benchmark answers.
+
+\begin{figure}[!htb]
+  \centering
+  \begin{subfigure}{0.8\textwidth}
+    \centering
+    \includegraphics[width=\textwidth]{usecase-assets-1-anon.png}
+    \caption{Top-down view of a ring road in the Porto region. The outline panel on the right lists the asset types present, among them kilometre markers, pavement sections, point and line road markings, signs, lighting, SOS posts, and CCTV cameras.}
+    \label{fig:usecase-assets-overview}
+  \end{subfigure}
+
+  \medskip
+  \begin{subfigure}{0.8\textwidth}
+    \centering
+    \includegraphics[width=\textwidth]{usecase-assets-2-anon.png}
+    \caption{Street-level view in FreeFly mode. A regulatory sign (code C11b) is selected and rendered with its own face texture; an entity without a dedicated model is drawn as a generic placeholder cube.}
+    \label{fig:usecase-assets-detail}
+  \end{subfigure}
+  \caption[Road asset management use case]{Road assets on a ring road in the Porto region (road infrastructure operator B).}
+  \label{fig:usecase-assets}
+\end{figure}
+\FloatBarrier
+
+\subsection{Toll Operation and Autonomous-Driving Support}
+
+Figure~\ref{fig:usecase-tolling} shows the tolling use case, the most demanding of the five in latency and positional accuracy: a gantry and its sensors, which are static entities; the vehicles they detect are the opposite, created and destroyed within seconds of one another as they pass the gantry. This use case therefore exercises the streaming and placement paths of Sections~\ref{sec:entity-model} and~\ref{sec:geospatial-placement} more heavily than any other.
+
+\begin{figure}[!htb]
+  \centering
+  \includegraphics[width=0.85\textwidth]{usecase-tolling-anon.png}
+  \caption[Toll operation use case]{An Open Road Tolling gantry (tolling technology provider) seen from above, with its toll point and LiDAR sensor listed as entities in the outline panel. Frame from a recording made during development, as the tolling connection was being reworked when this chapter was written; the interface is unchanged.}
+  \label{fig:usecase-tolling}
+\end{figure}
+\FloatBarrier
+
+\bigskip
+Taken together, these five scenes are qualitative, not exhaustive, evidence: they show that the architecture accommodates every use case DT4MOB's partners actually brought, without a single change to the generic spawn, update, or rendering path, but they are not a formal proof that \emph{any} conceivable entity type would be accommodated as cleanly. Section~\ref{sec:eval-discussion} returns to this distinction when relating RQ1 to the other two research questions.
 
 \section{Performance Benchmarks}
 \label{sec:eval-benchmarks}
 
 \subsection{Rationale and Subject}
 
-The entity type chosen as the benchmark subject is the road sign. Signs are the clearest case of a high-cardinality type: a real road network contains them in the tens of thousands, they share a small number of base geometries (circular and triangular blanks) but differ in their face texture, and they are all rendered with the same simple flat-panel material. This makes them an ideal stress test for the spawning and rendering path and, separately, a clean setting in which to compare mesh and material batching strategies, since the only thing that varies between one sign and another is which texture it shows.
+The entity type chosen as the benchmark subject is the road sign. Signs are the clearest case of a high-cardinality type: a real road network contains them in the tens of thousands, they share a small number of base geometries (circular and triangular blanks, among others) but vary in their face texture, and they are all rendered with the same simple flat-panel material. This makes them a natural stress test for the spawning and rendering path and, separately, a clean setting in which to compare mesh and material batching strategies along two axes that trade off against each other: how cheaply many visually distinct signs can be stored and rendered, and how easy it is to add one more sign to the set.
 
-Three strategies are compared, implemented as interchangeable \texttt{USignSpawnStrategy} subclasses:
+Three strategies are compared, implemented as interchangeable variants of the same sign-creation step. The naive baseline, \textsc{PerSign}, uses one fully self-contained, pre-baked mesh per sign code, with its texture baked in, and places each sign as an individual static mesh component, with no instancing. It was expected to lose on both draw calls and on-disk and in-memory size, because geometry is duplicated per code.
 
-\begin{description}
-    \item[\textsc{PerSign}] The naive baseline. One fully self-contained, pre-baked mesh with its texture baked in per sign code, placed as an individual static mesh component. No instancing. Expected to lose on both draw calls and on-disk/in-memory size because geometry is duplicated per code.
-    \item[\textsc{PerTexture}] One shared mesh per base shape, but a separate dynamic material instance and a separate Instanced Static Mesh (ISM) component per distinct sign texture, because the engine cannot batch different materials into one ISM. Instance and geometry count match \textsc{AtlasMaterial}, but there are as many components, materials, and draw calls as there are distinct textures.
-    \item[\textsc{AtlasMaterial}] One shared mesh and one shared atlas-textured material per base shape, with every instance of that shape batched into a single ISM. Each instance carries four floats of per-instance custom data (a UV offset and scale) selecting its cell in the packed atlas texture. Two shapes therefore mean two components, two materials, and two draw calls regardless of how many distinct signs are shown.
-\end{description}
+\textsc{PerTexture} uses one shared mesh per base shape, but a separate dynamic material instance and a separate Instanced Static Mesh (ISM) component per distinct sign texture, because the engine cannot batch different materials into one ISM. Its instance and geometry counts match those of \textsc{AtlasMaterial}, but it has as many components, materials, and draw calls as there are distinct textures.
+
+\textsc{AtlasMaterial} uses one shared mesh and one shared atlas-textured material per base shape, with every instance of that shape batched into a single ISM. Each instance carries four floats of per-instance custom data (a UV offset and scale) that select its cell in the packed atlas texture. Two shapes therefore mean two components, two materials, and two draw calls, regardless of how many distinct signs are shown.
 
 \subsection{Harness}
+\label{sec:eval-harness}
 
-The benchmark is a standalone console-driven harness (\texttt{ASignBenchmarkGameMode}), set as a per-level game-mode override on an otherwise empty level and deliberately kept entirely separate from the Ditto entity pipeline -- its own asset-fetching subsystem, its own on-disk cache -- so that it cannot perturb, or be perturbed by, the production code path. A run is triggered by a console command naming a strategy and an instance count; instances are placed on a regular grid, cycling through the 17 available sign codes. Each run destroys and respawns a fresh root actor so no state leaks between measurements.
+The benchmark is a standalone harness driven from the engine's console, running on an otherwise empty level and deliberately kept entirely separate from the viewer's live entity pipeline, with its own asset fetching and its own on-disk cache, so that it cannot perturb, or be perturbed by, the production code path. A console command triggers a run by naming a strategy and an instance count; instances are placed on a regular grid, cycling through the 17 available sign codes. The camera is not moved during or between runs, so the same region of the grid is in view in every measurement, and view-frustum culling operates under identical conditions for every strategy and instance count. Each run clears the previous signs and starts from a fresh scene, so no state leaks between measurements.
 
-For each run the harness records:
-
-\begin{itemize}
-    \item \textbf{prepare time} -- from the first asset request to all assets ready (download from cache, decode, atlas construction);
-    \item \textbf{spawn time} -- from assets-ready to the last instance placed;
-    \item \textbf{instance, component, unique-mesh, unique-material, and unique-texture counts} -- the structural cost of the strategy;
-    \item \textbf{frame timing} -- steady-state GPU and game-thread frame time with the instances in view, from the engine's own statistics.
-\end{itemize}
+For each run, the harness records the \emph{prepare time}, from the first asset request until all assets are ready (download from cache and decode), and the \emph{spawn time}, from that point until the last instance is placed. It also records the structural cost of the strategy, as the number of instances, components, unique meshes, unique materials, and unique textures, and the steady-state GPU and game-thread frame time with the instances in view, taken from the engine's own statistics, together with the draw calls per frame and the resident mesh and texture memory.
 
 \subsection{Methodology}
 \label{sec:eval-method}
 
-Per supervisor feedback, every metric is captured over ten runs per configuration and averaged, including metrics that are themselves engine-reported averages (such as mean frame time), so that run-to-run variance from background OS activity and shader compilation is smoothed out. The first run after launch for each strategy is treated as a warm-up and discarded to exclude one-off shader compilation and cache-population costs.
+Every configuration is run ten times, and each metric is reported as the mean and sample standard deviation over those ten runs, including metrics that are themselves engine-reported averages (such as mean frame time), so that run-to-run variance from background OS activity and shader compilation is both smoothed out and made visible. Unlike a typical warm-up methodology, cold-cache runs are not discarded: for each strategy, ten further runs at \(N=100\) with the assets not yet cached are recorded and reported separately, so that the one-off cost of downloading and decoding assets on a first encounter is captured rather than hidden.
 
-Instance counts of \todo[inline,size=\footnotesize]{fix the sweep: e.g.\ 100, 500, 1000, 5000, 10000, 25000} are swept for each of the three strategies. The benchmark is run on \todo[inline,size=\footnotesize]{specify: CPU, GPU, RAM, OS, UE version, build configuration (Development vs Shipping), resolution, VSync off}.
+Differences between strategies are tested with Welch's \(t\)-test, which compares two means without assuming equal variances~\cite{welch1947}, at a significance level of 0.05. Where the same pair of strategies is compared at all four instance counts, the resulting \(p\)-values are corrected for multiple comparisons with the Holm procedure~\cite{holm1979}. A statistically significant difference is not necessarily a practically relevant one, so each significant difference is also reported in absolute terms.
 
-\paragraph{Threat to validity: texture representativeness.} The harness decodes sign textures into uncompressed, single-mip transient textures rather than the block-compressed, mip-mapped, streamed textures a cooked build would use. Absolute memory figures are therefore not production-representative. This affects all three strategies identically, so the \emph{comparison} between them remains valid; only the absolute memory axis should be read with this caveat. \todo[inline,size=\footnotesize]{Optionally re-run \textsc{AtlasMaterial} vs \textsc{PerTexture} with cooked BC-compressed textures for one instance count to quantify the offset.}
+Instance counts of 100, 1000, 5000, and 15000 are swept for each of the three strategies, spanning from a small sanity-check count to a range approaching the tens-of-thousands scale motivating this benchmark (Section~\ref{sec:eval-benchmarks}). The benchmark is run on an AMD Ryzen 9 9900X (12 cores / 24 threads, 4.4\,GHz) with an AMD Radeon RX 7800\,XT (16\,GB VRAM) and 64\,GB RAM, on Windows 11 Pro (build 26200), Unreal Engine 5.6, Development build configuration, launched as Standalone (not Play-in-Editor, to avoid editor overhead contaminating the frame-time and draw-call measurements) at 1920\(\times\)1080 with VSync off; this is not a Shipping-configuration measurement and the numbers below should be read accordingly.
+
+\paragraph{Note on texture representativeness.} The harness decodes sign textures at runtime into uncompressed textures with a single resolution level (no mipmaps), 8 bits per colour channel. This could appear to threaten validity, since a ``cooked build'' would normally ship block-compressed, mip-mapped versions instead; that comparison does not apply here. Every entity's content in this viewer, signs included, is fetched from a backend and decoded at runtime rather than authored ahead of time. Hence, none of it passes through Unreal's cooker at all, in the harness or the live viewer, and no compressed, mip-mapped, statically cooked version of these textures exists to compare against. The absolute memory figures reported should therefore be read as representative of this viewer's actual runtime texture cost, not simply valid for the relative comparison between strategies, though this has only been confirmed for the way sign textures specifically are loaded.
 
 \subsection{Results}
 \label{sec:eval-results}
 
-\todo[inline]{Benchmark results pending the 10-run re-capture (Flow State task: ``Re-run benchmark metrics: average each metric over 10 runs''). Populate Table~\ref{tab:bench-structural}, Table~\ref{tab:bench-timing}, and Figure~\ref{fig:bench-scaling} below.}
+Table~\ref{tab:bench-structural} and Table~\ref{tab:bench-timing} report the sweep's largest instance count, \(N=15{,}000\), the point closest to the tens-of-thousands scale that motivates this benchmark; Figure~\ref{fig:bench-scaling} shows the full sweep across all four tested counts. Every figure below, warm or cold, is the mean of ten runs, given in the tables with its standard deviation.
 
 \begin{table}[t]
   \centering
-  \caption[Structural cost per strategy]{Structural cost per strategy at \(N\) instances. Lower is better for all columns.}
+  \caption[Structural cost per strategy]{Structural cost per strategy at \(N=15{,}000\) instances. Lower is better for all columns. Component, mesh, and material counts are identical in every run; draw calls are the mean \(\pm\) standard deviation over ten runs.}
   \label{tab:bench-structural}
+  \small
   \begin{tabular}{lrrrr}
     \hline
-    Strategy & Components & Unique meshes & Unique materials & Draw calls \\
+    Strategy & Components & \shortstack[r]{Unique\\meshes} & \shortstack[r]{Unique\\materials} & \shortstack[r]{Draw\\calls} \\
     \hline
-    \textsc{PerSign}       & --- & --- & --- & --- \\
-    \textsc{PerTexture}    & --- & --- & --- & --- \\
-    \textsc{AtlasMaterial} & --- & --- & --- & --- \\
+    \textsc{PerSign}       & 15{,}000 & 17 & 0  & 1512.3 \(\pm\) 48.9 \\
+    \textsc{PerTexture}    & 17       & 2  & 17 & 102.5 \(\pm\) 0.4 \\
+    \textsc{AtlasMaterial} & 2        & 2  & 2  & 66.4 \(\pm\) 0.2 \\
     \hline
   \end{tabular}
 \end{table}
 
 \begin{table}[t]
   \centering
-  \caption[Timing and memory per strategy]{Prepare time, spawn time, steady-state frame time, and resident memory per strategy, averaged over ten runs (warm-up discarded).}
+  \caption[Timing and memory per strategy]{Prepare time (warm), spawn time, steady-state frame time, and resident mesh + texture memory per strategy at \(N=15{,}000\), as mean \(\pm\) standard deviation over ten warm runs. Prepare (cold) is the separately measured first-encounter cost at \(N=100\), over ten cold-cache runs (Section~\ref{sec:eval-method}); structural cost does not vary with cache state, so this is the only column that differs between the two. Memory was identical in every run.}
   \label{tab:bench-timing}
-  \begin{tabular}{lrrrr}
+  \small
+  \setlength{\tabcolsep}{4pt}
+  \begin{tabular}{lrrrrr}
     \hline
-    Strategy & Prepare (s) & Spawn (s) & Frame (ms) & Memory (MiB) \\
+    Strategy & \shortstack[r]{Prepare\\warm (ms)} & \shortstack[r]{Prepare\\cold (ms)} & \shortstack[r]{Spawn\\(ms)} & \shortstack[r]{Frame\\(ms)} & \shortstack[r]{Memory\\(MiB)} \\
     \hline
-    \textsc{PerSign}       & --- & --- & --- & --- \\
-    \textsc{PerTexture}    & --- & --- & --- & --- \\
-    \textsc{AtlasMaterial} & --- & --- & --- & --- \\
+    \textsc{PerSign}       & 1.1 \(\pm\) 0.4 & 122.3 \(\pm\) 41.2 & 1350.3 \(\pm\) 16.4 & 4.24 \(\pm\) 0.05 & 0.209 \\
+    \textsc{PerTexture}    & 1.1 \(\pm\) 0.1 & 102.7 \(\pm\) 32.6 & 36.6 \(\pm\) 0.2   & 2.82 \(\pm\) 0.02 & 1.110 \\
+    \textsc{AtlasMaterial} & 1.0 \(\pm\) 0.2 & 205.4 \(\pm\) 29.4 & 35.8 \(\pm\) 0.3   & 2.83 \(\pm\) 0.02 & 24.403 \\
     \hline
   \end{tabular}
 \end{table}
 
 \begin{figure}[t]
   \centering
-  \missingfigure[figwidth=0.8\textwidth]{Spawn time and steady-state frame time versus instance count, one line per strategy, log-scaled x axis.}
-  \caption[Scaling with instance count]{Spawn time and frame time as a function of instance count, per strategy.}
+  \includegraphics[width=0.95\textwidth]{bench-scaling.pdf}
+  \caption[Scaling with instance count]{Spawn time as well as steady-state frame time as a function of instance count, per strategy (log-scaled axes; warm runs, mean of ten). Error bars are omitted for readability; the standard deviations at \(N=15{,}000\) are given in Table~\ref{tab:bench-timing}.}
   \label{fig:bench-scaling}
 \end{figure}
 
 \subsection{Discussion of Performance}
 \label{sec:eval-perf-discussion}
 
-\todo[inline]{Write once results exist. Expected shape of the argument: (i) \textsc{AtlasMaterial} should hold frame time near-constant regardless of how many distinct signs are shown, because draw calls are fixed at two; (ii) \textsc{PerTexture} should degrade with the number of distinct textures on screen; (iii) \textsc{PerSign} should be worst on every axis and should be ruled out. Conclude with the recommendation for how a high-cardinality type should be rendered in the viewer, and confirm that the generic spawn path's own overhead is not a factor at any tested count.}
+\textsc{PerSign} should be ruled out, and the data says so unambiguously: at \(N=15{,}000\) it issues 15--23\(\times\) more draw calls than the other two strategies, takes 37--38\(\times\) longer to spawn (1350\,ms versus 36\,ms), and runs 50\% slower per frame (\(p<0.001\) for both spawn and frame time against either alternative). Figure~\ref{fig:bench-scaling} shows why: \textsc{AtlasMaterial}'s and \textsc{PerTexture}'s draw calls stay essentially flat across the whole sweep (66--69 and 103--106, respectively, regardless of instance count, since both are tied to the number of unique shapes or textures rather than instances), while \textsc{PerSign}'s draw calls grow with instance count because every instance is its own unbatched component. That growth is sub-linear rather than proportional to instance count (383 at \(N=100\) to 1512 at \(N=15{,}000\), an increase of roughly 4\(\times\) for a 150\(\times\) increase in instances), consistent with view-frustum culling limiting how many of the spawned instances are actually in view at once on the fixed benchmark grid. Because the camera is identical across runs (Section~\ref{sec:eval-harness}), that culling affects every strategy and instance count equally, so the comparison between them is not skewed by what happens to be on screen; the reported draw-call figure shows what is rendered per frame, not the total spawned.
+
+The comparison between \textsc{AtlasMaterial} and \textsc{PerTexture} is less clear-cut than the structural numbers alone suggest, and the honest result is worth stating plainly rather than forcing into the cleaner story the draw-call gap might imply. Despite \textsc{AtlasMaterial} issuing roughly a third fewer draw calls than \textsc{PerTexture} at every tested count, the two strategies' steady-state frame times track each other closely across the entire sweep (2.11--2.83\,ms for \textsc{AtlasMaterial} versus 2.12--2.82\,ms for \textsc{PerTexture}). The run-to-run variation is small enough that even this gap can be resolved: at 100, 1000, and 5000 instances \textsc{AtlasMaterial} is statistically faster (Holm-corrected \(p=0.026\), \(p<0.001\), and \(p=0.012\), respectively), but only by 0.014--0.017\,ms, under 1\% of the frame time. At \(N=15{,}000\) the difference is not significant (\(2.83 \pm 0.02\)\,ms against \(2.82 \pm 0.02\)\,ms, \(p=0.57\)). Up to 15,000 instances, therefore, the draw-call advantage of atlasing has not translated into a practically relevant frame-time advantage; whatever is dominating frame time at this range, likely per-instance CPU work such as culling and transform updates rather than draw-call submission cost, affects both strategies about equally. Memory tells a sharper story in the other direction: \textsc{AtlasMaterial}'s packed atlas texture costs 24.4\,MiB against \textsc{PerTexture}'s 1.1\,MiB, a 22\(\times\) difference, because a single large uncompressed atlas canvas does not compress or stream as efficiently as many small per-icon textures (Section~\ref{sec:eval-method} notes why these figures are read as actual runtime cost rather than a cooked-build approximation). This replicates, with a proper ten-run average instead of a single sample, the same qualitative finding as the first one-off measurement that motivated this benchmark.
+
+Prepare time confirms the caching design works as intended: a cold, first-encounter fetch costs 103--205\,ms depending on strategy (\textsc{AtlasMaterial}'s is the slowest to prepare cold), while every warm run, regardless of strategy or instance count, costs about 1\,ms, a two-orders-of-magnitude difference. This is a one-off cost paid once per session per strategy, not a recurring per-spawn cost, and the sweep's flat warm-prepare figures across all four instance counts confirm that scaling instance count alone does not reopen it.
+
+Taken together, the recommendation for a high-cardinality entity type in this viewer is: never use the unbatched \textsc{PerSign} pattern, and between the two batched strategies, prefer \textsc{PerTexture} over \textsc{AtlasMaterial} at the instance counts actually tested here, since it wins decisively on memory while the two are practically equivalent on frame time. This is a narrower recommendation than ``always atlas'', which this benchmark set out to test rather than confirm. \textsc{AtlasMaterial} could still become the better choice at counts well beyond 15,000, where draw-call submission cost might start to dominate frame time in a way it does not yet at this range, but that is an extrapolation beyond what was measured, not a finding.
 
 \section{User Testing}
 \label{sec:eval-user-testing}
 
-\todo[inline]{The user study has not yet been conducted. The design below is finalised; the Procedure and Results subsections are to be completed after the sessions are run.}
-
 \subsection{Objectives}
 
-The study assesses whether the viewer is usable and coherent for its intended users -- people who work with road-infrastructure data but are not familiar with the viewer's internal data model -- when carrying out realistic inspection tasks against a real dataset. The specific questions are whether participants can navigate to a location of interest, locate and identify entities, read an entity's details, and understand what they are seeing, without assistance and without prior training on the tool.
+The study assesses whether the viewer is usable and coherent for its intended users, people who work with road-infrastructure, mobility, or geospatial data but are not familiar with the viewer's internal data model, when carrying out realistic inspection tasks against the live DT4MOB dataset. The specific questions are whether participants can control the camera, navigate to a location of interest, locate and select entities, read an entity's details, and create and follow a simulated entity, without prior training beyond a short written introduction to the tool's controls.
 
 \subsection{Participants}
 
-\todo[inline,size=\footnotesize]{Target N (typically 5--8 for formative usability work), recruitment source, relevant background, any screening.}
+Ten participants took part, recruited from the partner companies behind the DT4MOB use cases (Section~\ref{sec:usecases}), so each works with at least one of the kinds of data the viewer displays. Some had seen the viewer before, but only at a much earlier stage of development. Their professional backgrounds covered the areas in which the viewer is intended to be used, spanning research, engineering, and project management in road infrastructure and mobility, and their ages ranged from under 25 to the 45--54 bracket. Most reported using maps or GIS tools (for example, Google Maps, QGIS, or ArcGIS) weekly or more, and most had worked with digital-twin or live monitoring systems at least occasionally; a minority had heard of such systems but never used one, and one participant never uses GIS tools at all. The sample is therefore close to the intended user population rather than a general one, which suits the study's formative aim. Still, it also means the results say little about users with no geospatial or infrastructure background.
 
 \subsection{Tasks}
 
-Participants carry out a fixed sequence of tasks with the live application, thinking aloud:
+Participants carried out a fixed sequence of eight tasks with the live application, each targeting one part of the interaction layer or one partner use case:
 
 \begin{enumerate}
-    \item navigate from the initial view to a named road segment (tests camera controls, both modes);
-    \item find a specific class of entity in that area -- for example a toll camera or a weather station -- and select it (tests visibility, hover and selection feedback, the entity type filter);
-    \item read a named attribute from the selected entity's detail panel (tests the info panel);
-    \item identify what a highlighted simulated or special entity represents -- a vehicle, or a fire's spread area (tests whether non-infrastructure entities are legible);
-    \item locate an entity by identifier using any means the UI provides.
+    \item \textbf{Camera mode.} Switch to the FreeFly camera, explore briefly, and return to the top-down RTS camera (tests both camera modes and the switch between them).
+    \item \textbf{Entity selection.} Zoom in over an area of the globe until entities are visible and select one (tests entity visibility, hover highlighting, and selection).
+    \item \textbf{Reading entity information.} With an entity selected, explore the tabs of its information window and identify its geographic location (tests the detail panel).
+    \item \textbf{Slope in the Lisbon region.} Navigate to the area of the instrumented slope in the Lisbon region, locate and select the slope entity, and review its details (the geotechnical use case, Section~\ref{sec:usecases}).
+    \item \textbf{Fire simulation.} Create a new fire simulation (an ignition point) anywhere on the globe, wait about ten seconds, and check that its state and perimeters update in the information window (the wildfire use case; tests entity placement and a simulated, time-varying entity).
+    \item \textbf{Navigation to the Porto region.} Navigate across mainland Portugal to the Porto region (tests long-distance navigation).
+    \item \textbf{Ring road in the Porto region.} Locate a ring road in the Porto region, zoom in until its road infrastructure entities are visible, select one, and inspect its details (the road asset management use case).
+    \item \textbf{Traffic in the Porto region.} Observe the traffic entities in the area of that ring road, select vehicles, and identify whether each comes from a simulation or from real-time sensors (the traffic use case).
 \end{enumerate}
 
 \subsection{Measures}
 
-\begin{itemize}
-    \item \textbf{Task success}, scored as complete / completed with difficulty / failed;
-    \item \textbf{Time on task};
-    \item \textbf{Errors and points of confusion}, from observation and think-aloud;
-    \item \textbf{Perceived usability}, via the System Usability Scale administered after the session;
-    \item \textbf{Debrief comments}, from a short semi-structured interview.
-\end{itemize}
+After each task, participants reported whether they had completed it without difficulty, completed it with some difficulty, or not completed it, rated how easy it was on a seven-point scale (1 = extremely difficult, 7 = extremely easy), and could leave free-text comments. After all tasks, perceived usability was measured with the System Usability Scale (SUS)~\cite{brooke1996sus}. Closing feedback came from open questions on what participants liked most, what they found hardest, what they missed, and what they would improve, together with whether they would recommend the application to a colleague.
 
 \subsection{Procedure}
 
-\todo[inline,size=\footnotesize]{Session length, setup (machine, dataset, starting state), moderation script, consent and data-handling, remote vs in-person.}
+Sessions were run individually and remotely, each moderated by the author over a video call, with participants running the viewer on their own work machines. Hardware therefore varied between participants and was not recorded. This had a direct consequence for the study: in the first scheduled session, the participant's machine could not run the build prepared for testing, and the session had to be rescheduled. In response, a lighter build was produced by changing only engine rendering settings, with no changes to the application's code: ray tracing was disabled, more expensive anti-aliasing methods were replaced with cheaper ones, and other costly rendering features were turned down. This build was used in every session that was run, including the rescheduled one, and it ran successfully. Every session began with informed consent, recorded as a mandatory checkbox in the questionnaire, after which the participant read a short written introduction to the system and its controls, including keyboard-based camera movement. The application ran connected to the live backend. Participants then worked through the eight tasks, recording the outcome, ease rating, and comments for each in a task questionnaire immediately after attempting it. After the tasks, participants completed a second questionnaire with background questions, the SUS, and the closing feedback questions. The task portion typically took around half an hour. Both questionnaires were anonymous and collected no names or contact details. The invitation, the written introduction, and both questionnaires are reproduced in Appendix~\ref{chap:appendix-user-test}.
 
 \subsection{Results}
 \label{sec:eval-user-results}
 
-\todo[inline]{To be completed after the sessions. Report per-task success and time, the SUS score, and a thematic summary of the observed usability issues, each tagged with the part of the UI it concerns.}
+\subsubsection*{Task Outcomes}
 
+Table~\ref{tab:user-tasks} summarises completion and perceived ease per task. Every participant completed the first six tasks, and the vast majority did so without difficulty; all six have a mean ease rating between 5.5 and 6.4 on the seven-point scale. Nine of ten participants completed Task~7; the one failure was not a navigation or comprehension problem but a performance issue, as the application stopped responding each time that participant zoomed in over the Porto region. No one could complete Task~8: the live traffic feed for that area was unavailable during the study, so there were no traffic entities to inspect. It is reported for completeness but excluded from the ease figures, which would otherwise measure the outage rather than the interface.
+
+\begin{table}[t]
+  \centering
+  \caption[User study task outcomes]{Task completion and perceived ease per task (\(N=10\)). Ease is rated from 1 (extremely difficult) to 7 (extremely easy).}
+  \label{tab:user-tasks}
+  \small
+  \begin{tabular}{llrrrrr}
+    \hline
+    & & \multicolumn{3}{c}{Completion} & \multicolumn{2}{c}{Ease} \\
+    \# & Task & \shortstack[r]{No\\difficulty} & \shortstack[r]{Some\\difficulty} & Failed & Mean & Median \\
+    \hline
+    1 & Camera mode              & 10 & 0 & 0  & 5.6 & 5.5 \\
+    2 & Entity selection         & 9  & 1 & 0  & 5.9 & 6.0 \\
+    3 & Reading entity info      & 10 & 0 & 0  & 6.4 & 6.5 \\
+    4 & Slope (Lisbon region)    & 8  & 2 & 0  & 6.0 & 6.0 \\
+    5 & Fire simulation          & 7  & 3 & 0  & 5.5 & 5.5 \\
+    6 & Navigation (Porto region) & 7  & 3 & 0  & 6.4 & 6.5 \\
+    7 & Ring road (Porto region) & 8  & 1 & 1  & 5.8 & 6.5 \\
+    8 & Traffic (Porto region)   & 0  & 0 & 10 & n/a & n/a \\
+    \hline
+  \end{tabular}
+\end{table}
+
+The two lowest-rated tasks are informative. Everyone completed Task~1 (camera mode, mean 5.6), but comments focused on the controls rather than the mode switch itself: the FreeFly camera felt too fast, with requests for a speed multiplier, less motion blur, and Esc rather than Tab to release the cursor. Everyone also completed Task~5 (fire simulation, mean 5.5), but three of ten needed some effort, and the comments point to feedback rather than capability: one participant saw no visual confirmation that the ignition point had been created, placed a second one, and also expected to press the placement button first and choose the entity type afterwards rather than the reverse; others asked for a prompt or a changed cursor after pressing \emph{Place Entity}, a legend for the fire's colour scale, and a progress indicator while the simulation runs.
+
+\subsubsection*{Perceived Usability}
+
+The mean SUS score is 81.1 (median 82.5, SD 10.6, range 67.5--95). This is well above the commonly cited average of 68~\cite{sauro2011sus} and falls between the ``good'' and ``excellent'' adjective ratings of \textcite{bangor2009sus}; only one individual score is below 70. The item-level pattern is consistent with the task comments: the negatively worded items on unnecessary complexity (mean 1.3 of 5) and inconsistency (1.4) score best, and the positively worded items on how well the functions are integrated (4.3) and confidence using the system (4.2) score well, while the weakest items are wanting to use the system frequently (4.0) and believing most people would learn it quickly (3.9). Asked whether they would recommend the application to a colleague in their field, most answered ``yes, definitely'', the rest ``probably yes'' or ``don't know'', and none answered negatively.
+
+\subsubsection*{Observed Issues}
+
+The free-text answers from both questionnaires cluster into four themes, each tied to the part of the interface it concerns.
+
+The most frequent complaint concerned the camera controls, and was raised in both questionnaires by roughly half the participants: keyboard-driven movement was not what they expected, and they asked to pan and drag with the mouse, as in familiar map tools. Participants who liked the navigation also compared it to Google Maps, suggesting the expectation comes from those tools.
+
+The second theme concerned scene rendering: entities are hard to see or pick when zoomed out, and hard to find without knowing beforehand where they are. Suggestions included larger, coloured icons, a clustered marker for groups of entities at far zoom levels, a country-level marker showing where the digital twins are, and a readout of the camera's current coordinates.
+
+The third concerned the placement tool, which gives no feedback: nothing confirms that an entity was created, and the fire simulation shows neither a legend for its colour scale nor its progress while it runs. The fourth concerned performance across the whole application. Even with the lighter build, the application became slow for some participants after a fire simulation was created, and in one session it froze when zooming in over the Porto region, which caused the only interface-related task failure.
+
+Participants valued the integration of data from several sources in one scene, real-time visualisation, the ability to run the fire-spread model from within the viewer (mentioned independently by several participants), and the rendering quality, notably in urban areas.
 \section{Discussion}
 \label{sec:eval-discussion}
 
-\todo[inline]{Synthesise both parts once results exist. The intended throughline: the performance results speak to whether the \emph{generic} entity path can carry a realistic scene (RQ3) -- if atlas-style batching keeps a high-cardinality type tractable and the per-type indirection costs nothing measurable, the generalisation in Chapter~\ref{chap:architecture} is not paid for in performance. The user-study results speak to whether a viewer built to be generic over its data still presents a coherent, specific experience to someone exploring one dataset (RQ4). Relate any usability issues back to whether they stem from the decoupled design or are independent of it.}
+Section~\ref{sec:eval-usecases} shows RQ1's generalisation claim holding across five independently specified partner use cases, but only qualitatively: the architecture accommodates all five without changing the generic path, which is evidence of generality, not proof that any conceivable entity type would fit as cleanly. The performance results answer a narrower, complementary question: whether the \emph{generic} entity path can carry a realistic high-cardinality scene without the per-type indirection itself becoming a bottleneck. It can, but not for free by default: the naive \textsc{PerSign} pattern degrades considerably with count, and the two batched strategies stay cheap only because the entity model's extension point (Section~\ref{sec:entity-model}) lets signs opt into ISM-based batching without touching the generic spawn path. Generalisation was not paid for in performance here, but only because the architecture leaves room for a type to choose a non-default rendering strategy in the first place; a viewer without that seam would have had no equivalent escape hatch for a high-cardinality type.
+
+The user study answers RQ4 positively, with qualifications. A mean SUS of 81.1, full completion of the first six tasks, and near-full completion of the seventh show that people from the intended user population could use it to explore a concrete dataset after reading only a short introduction. That matters for the generality argument above: the generic entity model, one detail panel shared by every type, and one selection path did not feel like a patchwork. The items that score best in the SUS are precisely those on inconsistency and unnecessary complexity, and participants inspected the slope, the fire simulation, and the ring-road infrastructure through the same interactions, with no type-specific instruction. Three of the partner use cases (geotechnical, wildfire, and road assets) are therefore shown to be usable in practice, not only accommodated architecturally. The traffic use case is not: Task~8 could not be run, so its usability remains untested.
+
+The issues participants raised are almost entirely independent of the decoupled design. Keyboard-first navigation, low-zoom visibility, and missing placement feedback are all properties of the camera and UI layers that would appear in the same form in a viewer hard-coded to one dataset. They are also the kind of issue that is cheap to fix and that a formative study is meant to find. Two findings do touch the architecture. The first is entity discoverability at a distance. Because the viewer does not know in advance which types exist or where they cluster, it has no built-in overview of where the data is, which is exactly what the requests for clustered markers and a country-level marker ask for. Adding one would also have to be generic across entity types, for example, by aggregating on position alone. The second is performance on modest machines, where the fire simulation and the dense ring-road scene slowed or froze the application. The benchmark in Section~\ref{sec:eval-benchmarks} measured only the sign path on a high-end machine, so it does not predict this case; whether the entity types involved would benefit from the same opt-in batching, and how much of the slowdown is due to the participants' hardware, which varied and was not recorded, was not examined. That the first scheduled session could not run at all until rendering settings were lowered points to the same issue: the viewer's hardware floor is currently a practical barrier for the very users it targets, who run it on ordinary work machines rather than a development workstation. Because that barrier was lowered by changing engine rendering settings alone, it is set by the rendering configuration rather than by the architecture, and a user-selectable quality level would be a cheap way to address it. Neither result contradicts RQ1 or RQ3, but both mark where generality still needs targeted work before the viewer is comfortable on the machines its users actually have.

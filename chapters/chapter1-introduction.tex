@@ -2,27 +2,35 @@
 \label{chap:introduction}
 
 \begin{introduction}
-This chapter introduces the problem addressed by this thesis, states its objectives, research questions, and contributions, describes the approach taken and the scope of the work, and outlines the structure of the remaining chapters.
+This chapter presents the problem addressed in the thesis, states its objectives, research questions, and contributions, describes the methodological approach and scope, and outlines the structure of the subsequent chapters.
 \end{introduction}
 
 \section{Context and Motivation}
 \label{sec:context}
 
-A \emph{digital twin} is a virtual representation of a physical entity, kept synchronised with its real-world counterpart through a live data connection. Although the term is used inconsistently across disciplines~\cite{abdelrahman2025whatisdigitaltwin}, most definitions share three elements: a physical entity, a virtual entity that represents it, and a connection -- ideally continuous and bidirectional -- between the two. Applied to physical infrastructure, a digital twin is a realistic digital model of assets, processes, or systems in the built environment, updated to reflect the state of its physical counterpart~\cite{broo2021digitaltwins}.
+Modern road networks and mobility systems generate large volumes of heterogeneous data, from roadside sensors, connected vehicles, surveillance systems, and simulation models. Collecting that data is no longer the main difficulty; turning it into information that supports timely, well-founded decisions is~\cite{chen2014bigdata}. This is the concern of information visualisation and, more broadly, of visual analytics, which combines automated processing with interactive visual interfaces so that people can explore, understand, and reason about large and complex datasets~\cite{keim2010visualanalytics}. The value of such an interface lies less in the individual data points it shows than in how quickly and reliably a person can see what matters among them.
 
-In the mobility domain, the physical entities of interest are the components of a road network: the carriageway itself and its pavement, drainage, and slopes; road furniture such as signs, barriers, and kilometre markers; structures such as bridges and retaining walls; and the sensing and telematics equipment that instruments them -- weather stations, traffic cameras, variable message signs, emergency call points, and toll infrastructure. Increasingly, these are complemented by \emph{simulated} entities: vehicles produced by a traffic simulator, or the projected spread of a wildfire, which have no fixed physical counterpart but are streamed through the same channels and are expected to appear in the same scene.
+For operators of road infrastructure, what matters is often spatial and changes over time: where an incident is, which structures near it are affected, how traffic around it is evolving. Decisions of this kind depend on \emph{situation awareness}, the perception of the relevant elements in the environment, the comprehension of what they mean, and the projection of their state in the near future~\cite{endsley1995situation}. Traditional dashboards and two-dimensional displays split this picture across separate charts, tables, and map layers, leaving the operator to reassemble the spatial relationships between them. A three-dimensional, geographically accurate view that updates as data arrives can present those relationships directly, with the depth, scale, and perspective of the real environment. Real-time 3D game engines, originally built for entertainment, are increasingly used to build such views, because they combine high-quality rendering with interactive navigation and can handle large scenes efficiently~\cite{lyu2024ue5digitaltwin}.
 
-A digital twin system for this domain is conventionally divided into two halves. A \emph{backend} ingests data from the physical assets and from simulators, models each entity as a structured record, and exposes those records through a common interface, typically over HTTP and a streaming protocol such as WebSocket. Eclipse Ditto~\cite{kherbache2022ditto} is one such backend. The other half is a \emph{viewer}: an interactive application that fetches those records, places each entity at its real-world geographic position on a three-dimensional globe, renders it, and updates it as new data arrives, so that an operator can see the current state of the infrastructure at a glance and inspect any individual entity.
+A \emph{digital twin} is a virtual representation of a physical entity, kept synchronised with its real-world counterpart through a live data connection. The concept is generally traced to Michael Grieves, who presented an early form of it in the context of product lifecycle management in the early 2000s, later articulated as a model comprising a physical product, its virtual counterpart, and the data connections binding the two~\cite{grieves2016digitaltwin}. The term itself gained currency after \textcite{glaessgen2012digitaltwin} used it to describe an ultra-high-fidelity simulation of an aerospace vehicle, continuously updated from onboard sensor data and fleet history to mirror the life of its physical twin.
 
-This thesis is concerned with the viewer. The specific viewer it describes was developed in the context of the DT4MOB project, using an Eclipse Ditto deployment as its data source, but the concerns it addresses are not specific to that project or that backend.
+Since then, the term has spread across domains far beyond aerospace and manufacturing, and its meaning has broadened accordingly. \textcite{abdelrahman2025whatisdigitaltwin} analysed over 15,000 scientific publications on digital twins in the built environment. They found the concept used inconsistently, with definitions varying in how much autonomy, fidelity, and bidirectionality they require. A common core nonetheless recurs: a physical entity, a virtual entity representing it, and a connection between them that is, at minimum, a live flow of data from physical to virtual. Stricter definitions add a return path, the virtual model influencing the physical system, and a degree of simulation or prediction.
+
+Within the mobility domain, the main physical entities are the components of the road network and the associated sensing and telematics equipment. These are increasingly complemented by \emph{simulated} entities, such as vehicles generated by traffic simulators, which lack fixed physical counterparts but are streamed through the same channels and are expected to be visualised within the same scene.
+
+A digital twin system for this domain is conventionally divided into two halves. A \emph{backend} ingests data from the physical assets and from simulators, and models each entity as a structured record. It exposes those records through a common interface, typically over HTTP and a streaming protocol such as WebSocket. Eclipse Ditto~\cite{kherbache2022ditto} is one such backend. The other half is a \emph{viewer}: an interactive application that fetches those records, places each entity at its real-world geographic position on a three-dimensional globe, renders it, and updates it as new data arrives, so that an operator can see the current state of the infrastructure at a glance and inspect any individual entity.
+
+For this thesis, the relevant notion of a digital twin is deliberately modest. The system of interest maintains a virtual representation of physical (and simulated) infrastructure entities, kept current by a live data feed. Whether such a system is a ``true'' digital twin under a stricter definition, and whether it should include prediction or actuation, are \emph{backend} questions outside the scope of this work (Section~\ref{sec:scope}). What matters here is that the data feed exists and that something must render it.
+
+This thesis therefore focuses on the viewer component. The viewer described here was developed within the DT4MOB research project, presented in Section~\ref{sec:dt4mob}, using an Eclipse Ditto deployment as its data source; however, the issues addressed are not limited to this specific project or backend. A single viewer was expected to display very different kinds of entity, from instrumented slopes that barely change to thousands of moving vehicles and simulated wildfire perimeters. That heterogeneity, rather than an abstract preference for generality, motivates the problem statement in Section~\ref{sec:problem}.
 
 \subsection{Why Viewers Are Built Coupled}
 
-In practice, infrastructure digital twin viewers tend to be built as closed, purpose-specific applications. The visualisation layer is written for one infrastructure domain and wired directly to one backend. This is a reasonable default: a viewer is usually commissioned for a single deployment, the backend and its data schema are known and fixed at the start, and the fastest path to a working application is to write rendering and interaction code directly against that schema and that API.
+In practice, infrastructure digital twin viewers are frequently developed as closed, purpose-specific applications. The visualisation layer is typically tailored to a single infrastructure domain and directly connected to one backend. This approach is a reasonable default, as viewers are usually commissioned for a specific deployment, with the backend and its data schema known and fixed at the outset. Consequently, the quickest path to a working application is to write rendering and interaction code directly against that schema and API.
 
-The cost of this default appears later. The entity types the viewer can display are fixed in its rendering and interaction code, so adding a new kind of infrastructure entity -- a new sensor type, a new class of road furniture -- means editing the spawn logic, the update handling, and the rendering path, rather than describing the new type in one place. The backend is equally fixed: its authentication scheme, its pagination, and the exact shape of its update messages are assumed throughout the codebase, so the viewer cannot be pointed at a different backend, and it cannot be run or tested at all without a live instance of the one it targets. Domain-specific and backend-specific logic accumulate throughout the same components, and the application becomes progressively harder to reason about, extend, or reuse.
+The cost of this default appears later. The entity types the viewer can display are fixed in its rendering and interaction code, so adding a new kind of infrastructure entity, such as a new sensor type or a new class of road furniture, means editing the spawn logic, the update handling, and the rendering path, rather than describing the new type in one place. The backend is equally fixed: its authentication scheme, pagination, and the exact shape of its update messages are assumed throughout the codebase, so the viewer cannot be pointed at a different backend, and it cannot run or be tested without a live instance of the one it targets. Domain-specific and backend-specific logic accumulate throughout the same components, and the application becomes progressively harder to reason about, extend, or reuse.
 
-Figure~\ref{fig:coupled-vs-decoupled} contrasts this arrangement with the one this thesis argues for, in which the entity model and the data-access layer are isolated behind explicit seams so that the rendering, interaction, and camera code depends on neither.
+Figure~\ref{fig:coupled-vs-decoupled} contrasts this arrangement with the architecture proposed in this thesis, in which the entity model and data-access layer are isolated behind explicit seams, ensuring that the rendering, interaction, and camera code is independent of both.
 
 \begin{figure}[t]
   \centering
@@ -52,31 +60,21 @@ Figure~\ref{fig:coupled-vs-decoupled} contrasts this arrangement with the one th
   \label{fig:coupled-vs-decoupled}
 \end{figure}
 
+In this context, ``decoupled'' refers specifically to the viewer's internal code structure, rather than implying effortless interoperability. The rendering, interaction, and camera layers in Figure~\ref{fig:coupled-vs-decoupled}(b) do not assume a particular backend or set of entity types. Redirecting the viewer to a new backend, or introducing an entity type from a new data source, still requires specifying the backend's connection details or the entity's schema through the defined seams. The key difference is the location and scope of these changes within the application, not the elimination of such work.
+
 \section{Problem Statement}
 \label{sec:problem}
 
-The problem this thesis addresses is the absence, in existing infrastructure digital twin viewers, of a clear internal separation between three concerns that vary independently:
+The problem this thesis addresses is the absence, in existing infrastructure digital twin viewers, of a clear internal separation between three concerns that vary independently. The first is \emph{what an entity is}: its data schema, its visual representation, the information shown when it is selected, and any behaviour it has over time. The second is \emph{where an entity's data comes from}: the backend's transport, authentication, pagination, and update-message format. The third is \emph{everything else}: rendering, selection and hover, the camera, coordinate placement, and the loop that decides which entities should currently be loaded.
 
-\begin{enumerate}
-  \item \textbf{what an entity is} -- its data schema, its visual representation, the information shown when it is selected, and any behaviour it has over time;
-  \item \textbf{where an entity's data comes from} -- the backend's transport, authentication, pagination, and update-message format;
-  \item \textbf{everything else} -- rendering, selection and hover, the camera, coordinate placement, and the loop that decides which entities should currently be loaded.
-\end{enumerate}
-
-When the first two are not separated from the third, the viewer is tied to one infrastructure domain and one backend, cannot be developed or validated independently of that backend, and cannot be reused. The goal of this work is a viewer in which the first two concerns are each confined to a single, well-defined seam, so that the third -- the bulk of the application -- is written once against generic abstractions and does not change when a new entity type is added or the backend is replaced.
+When the first two are not separated from the third, the viewer is tied to one infrastructure domain and one backend, cannot be developed or validated independently of that backend, and cannot be reused. The goal of this work is a viewer in which the first two concerns are each confined to a single, well-defined seam, so that the third, the bulk of the application, is written once against generic abstractions and does not change when a new entity type is added or the backend is replaced.
 
 \section{Objectives and Research Questions}
 \label{sec:objectives}
 
-The objectives of this work are:
+The first objective of this work is to design and implement an open-source digital twin viewer, built on Unreal Engine, capable of visualising many types of mobility-infrastructure entities without infrastructure-specific logic spreading through the codebase. The second is to decouple the viewer's rendering, interaction, and camera systems from the data backend that feeds them, so that the backend can be replaced or mocked without touching the rest of the application. The third is to evaluate the resulting system, through performance benchmarks of the entity spawning and rendering path and through user testing of the application.
 
-\begin{itemize}
-  \item to design and implement an open-source digital twin viewer, built on Unreal Engine, capable of visualising many types of mobility-infrastructure entities without infrastructure-specific logic spreading through the codebase;
-  \item to decouple the viewer's rendering, interaction, and camera systems from the data backend that feeds them, so that the backend can be replaced or mocked without touching the rest of the application;
-  \item to evaluate the resulting system, both through performance benchmarks of the entity spawning and rendering path and through user testing of the application.
-\end{itemize}
-
-These objectives are framed by the following research questions:
+The following research questions frame these objectives:
 
 \begin{description}
   \item[RQ1] Can a single architectural pattern support arbitrary mobility-infrastructure entity types within an Unreal Engine viewer without type-specific code in the generic spawn, update, and rendering paths?
@@ -85,42 +83,23 @@ These objectives are framed by the following research questions:
   \item[RQ4] Is the resulting application usable and coherent for its intended users when exploring a concrete dataset?
 \end{description}
 
-RQ1 and RQ2 are addressed by the architecture and implementation in Chapters~\ref{chap:architecture} and~\ref{chap:implementation}; RQ3 and RQ4 by the evaluation in Chapter~\ref{chap:evaluation}.
+RQ1 and RQ2 are addressed by the architecture and implementation in Chapters~\ref{chap:architecture} and~\ref{chap:implementation}, and RQ1 is also corroborated in Chapter~\ref{chap:evaluation} by showing the unmodified architecture accommodating five heterogeneous use cases from the project's industry partners; the evaluation in Chapter~\ref{chap:evaluation} addresses RQ3 and RQ4.
 
 \section{Approach}
 \label{sec:approach}
 
-The work followed an iterative development process rather than an up-front design. An initial viewer was built against a live Eclipse Ditto backend with the coupled structure described in Section~\ref{sec:context}, sufficient to render a fixed set of entity types. The generalised and decoupled architecture was then arrived at through a sequence of refactorings, each triggered by a concrete need encountered while extending the viewer: a second way of supplying credentials, an entity type that did not fit the existing spawn path, a rendering feature that only one entity type required. Chapter~\ref{chap:implementation} presents these refactorings in order, using each as a case study of where an architectural boundary was drawn and why.
+The viewer was developed iteratively against a live Eclipse Ditto backend, with the use cases of the project's industry partners (Section~\ref{sec:usecases}) as its concrete requirements. Each seam in its architecture answers one of those requirements: keeping credentials and connection details out of the code, supporting entity types that do not fit a single spawn path, and accommodating rendering features that only one entity type needs. Chapter~\ref{chap:architecture} presents the architecture, and Chapter~\ref{chap:implementation} describes how it is implemented, relating each implementation decision to the seam it belongs to.
 
-The backend was treated throughout as a fixed external dependency to build against, not as an object of study: it was used to validate the viewer, and its observed behaviour -- including its failure modes -- informed the design, but its internals are out of scope.
+The work is deliberately limited to the viewer\label{sec:scope}. The backend was treated throughout as a fixed external dependency to build against, not as an object of study: it was used to validate the viewer, and its observed behaviour informed the design, but how digital twin data should be modelled, stored, and served, and the design of Eclipse Ditto or any alternative, are the subject of other work. The same holds for the sensors, telematics equipment, and traffic or fire simulators that produce the data, which are seen here only through the records they yield via the backend. Accordingly, the benchmarks measure the viewer, not the backend's throughput or query latency. Photorealism is not a goal either: the viewer renders whatever meshes and models it is given, and producing high-fidelity 3D assets for each infrastructure type is outside the scope of this work.
 
 The evaluation has two parts. Performance is assessed with a benchmark harness that spawns and renders entities in controlled quantities and records frame timing and memory, with each configuration repeated and averaged over several runs. Usability is assessed through a user study in which participants carry out representative tasks with the viewer against a real dataset.
-
-\section{Scope and Non-Goals}
-\label{sec:scope}
-
-This thesis is about the viewer. The following are explicitly outside its scope:
-
-\begin{itemize}
-  \item \textbf{The backend.} How digital twin data should be modelled, stored, and served, and the design of Eclipse Ditto or any alternative, are the subject of other work. This document treats the backend as an interface to consume.
-  \item \textbf{The data sources.} The sensors, telematics equipment, and traffic or fire simulators that produce the data are not examined here; only the records they ultimately yield through the backend.
-  \item \textbf{Backend-side performance and scalability.} The benchmarks in Chapter~\ref{chap:evaluation} measure the viewer, not the backend's throughput or query latency.
-  \item \textbf{Photorealism and asset authoring.} The viewer renders whatever meshes and models it is given; producing high-fidelity 3D assets for each infrastructure type is not a goal.
-\end{itemize}
 
 \section{Contributions}
 \label{sec:contributions}
 
-The main contributions of this thesis are:
-
-\begin{itemize}
-  \item an open-source digital twin viewer for mobility infrastructure, built on Unreal Engine, that is generalisable across entity types and decoupled from its data backend;
-  \item an architectural pattern for achieving that generalisation and decoupling within an Unreal Engine application -- a service layer that confines all backend contact, and an entity model driven by a registration table with two escalating extension points -- documented through the concrete development decisions that produced it;
-  \item a benchmark harness and a set of results characterising the performance of the entity spawning and rendering path under this architecture;
-  \item a user study evaluating the viewer from the perspective of its intended users.
-\end{itemize}
+This thesis makes four contributions. The first is an open-source digital twin viewer for mobility infrastructure, built on Unreal Engine, that is generalisable across entity types and decoupled from its data backend. The second is the architectural pattern that achieves this within an Unreal Engine application: a service layer that confines all backend contact, and an entity model driven by a registration table and two escalating extension mechanisms that any number of entity types may use independently, documented through the implementation decisions that realise it. The third is a benchmark harness, with a set of results characterising the performance of the entity spawning and rendering path under this architecture, and the fourth is a user study evaluating the viewer from the perspective of its intended users.
 
 \section{Document Structure}
 \label{sec:structure}
 
-This document is organised into six chapters. Chapter~\ref{chap:introduction} has introduced the problem, objectives, and contributions. Chapter~\ref{chap:state-of-the-art} reviews related work on infrastructure digital twins, geospatial visualisation engines, and comparable viewer systems, and identifies the gap this thesis targets. Chapter~\ref{chap:architecture} presents the viewer's architecture: its layers, the boundaries between them, and the two seams through which entity types are added and the backend is replaced. Chapter~\ref{chap:implementation} details the implementation decisions that produced that architecture, as a sequence of case studies. Chapter~\ref{chap:evaluation} evaluates the system through performance benchmarks and user testing. Chapter~\ref{chap:conclusions} summarises the contributions and discusses limitations and future work, including the viewer's release as open-source tooling for other researchers.
+This document is organised into six chapters. Chapter~\ref{chap:introduction} introduces the problem, objectives, and contributions. Chapter~\ref{chap:state-of-the-art} reviews related work on infrastructure digital twins, the data sources behind them, geospatial visualisation engines, and existing digital twin platforms and viewers, and identifies the gap this thesis targets. Chapter~\ref{chap:architecture} presents the viewer's architecture: its layers, the boundaries between them, and the two seams through which entity types are added and the backend is replaced. Chapter~\ref{chap:implementation} describes how that architecture is implemented, relating each implementation decision to the seam it belongs to. Chapter~\ref{chap:evaluation} first presents the DT4MOB project and the use cases its partners brought, and then evaluates the system against them through use case validation, performance benchmarks, and user testing. Chapter~\ref{chap:conclusions} summarises the contributions and discusses limitations and future work, including releasing the viewer as open-source tooling for other researchers.

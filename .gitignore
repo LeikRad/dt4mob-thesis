@@ -126,3 +126,6 @@ tramp
 *.data.minted
 _minted*
 _*.data.minted
+
+# Grammarly export copies (generated from chapters/)
+grammarly/

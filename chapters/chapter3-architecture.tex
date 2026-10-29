@@ -2,205 +2,172 @@
 \label{chap:architecture}
 
 \begin{introduction}
-This chapter presents the high-level architecture of the digital twin viewer, focusing on the design choices that make it generalizable across infrastructure types and decoupled from any single data backend. It describes the layers the application is divided into, the boundaries between them, and the specific seams through which new entity types are added and the data source is replaced. The concrete decisions taken to arrive at this structure are the subject of Chapter~\ref{chap:implementation}.
+This chapter presents the high-level architecture of the digital twin viewer, focusing on the design choices that make it generalisable across infrastructure types and decoupled from any single data backend. It describes the components the viewer is made of, the boundaries between them, and the seams through which new entity types are added and data sources are replaced. Its implementation is the subject of Chapter~\ref{chap:implementation}.
 \end{introduction}
 
 \section{Overview}
 \label{sec:arch-overview}
 
-The viewer is structured as four layers with deliberately narrow interfaces between them, shown in Figure~\ref{fig:arch-overview}:
-
-\begin{itemize}
-    \item a \textbf{service layer} of engine-managed singletons that owns all contact with the outside world -- authentication, HTTP requests to the data backend, the live event stream, secure credential storage, remote model downloads, and coordinate conversion;
-    \item an \textbf{entity model} that turns a backend record into a world actor, driven by a single registration table and two optional extension points rather than by per-type code scattered through the application;
-    \item a \textbf{geospatial placement} seam that is the only place geographic coordinates are turned into engine world positions;
-    \item a \textbf{camera, interaction, and UI layer} that operates on actors and on the globe, and has no knowledge of entity types or of where their data came from.
-\end{itemize}
+The viewer is structured as four layers with deliberately narrow interfaces between them, shown in Figure~\ref{fig:arch-overview}. At the bottom, a \emph{service layer} of long-lived services owns all contact with the outside world: authentication, requests to the data backend, the live event stream, secure credential storage, remote model downloads, and coordinate conversion. Above it, an \emph{entity model} turns each backend record into an entity in the scene. It is driven by a single registration table and, for any type that needs more, by one of two optional extension mechanisms that any number of entity types may use independently, rather than by per-type code scattered through the application. A \emph{geospatial placement} seam is the only place where geographic coordinates are turned into positions in the scene. Finally, a \emph{camera, interaction, and UI layer} operates on entities and the globe, and knows nothing about entity types or where their data came from.
 
 \begin{figure}[t]
   \centering
   \begin{tikzpicture}[node distance=4mm]
-    \node[layer, text width=112mm] (ui) {Camera, Interaction \& UI\\{\footnotesize\mdseries\normalfont unified pawn (RTS / free-fly) --- selection \& hover --- HUD / entity window}};
-    \node[seam, below=of ui, text width=112mm] (placement) {Geospatial placement seam --- \texttt{UCoordinatesConversionService}\\{\footnotesize WGS84 lat/lon/alt $\rightarrow$ ECEF $\rightarrow$ Unreal world coordinates}};
-    \node[layer, below=of placement, text width=112mm] (entity) {Entity model\\{\footnotesize\mdseries\normalfont generic \texttt{ATempUIActor} --- \texttt{UDT4MOBEntityFactory} --- registration table $\rightarrow$ \texttt{UEntityTypeExtension} (per type) $\rightarrow$ \texttt{UEntityBehaviorComponent} (per instance)}};
-    \node[layer, below=of entity, text width=112mm] (svc) {Service layer --- GameInstance subsystems\\{\footnotesize\mdseries\normalfont Ditto REST --- WebSocket --- update daemon --- actor registry --- model download/cache --- credential store}};
-    \node[block, below=of svc, text width=70mm] (bk) {Data backend (Eclipse Ditto) \emph{or} mock};
+    \node[layer, text width=112mm] (ui) {Camera, Interaction \& UI\\{\footnotesize\mdseries\normalfont camera modes (overhead, free-fly), selection \& hover, HUD \& entity window}};
+    \node[seam, below=of ui, text width=112mm] (placement) {Geospatial placement seam\\{\footnotesize WGS84 lat/lon/alt $\rightarrow$ ECEF $\rightarrow$ scene coordinates}};
+    \node[layer, below=of placement, text width=112mm] (entity) {Entity model\\{\footnotesize\mdseries\normalfont generic entity, entity factory, registration table $\rightarrow$ per-type extension $\rightarrow$ per-instance behaviour component}};
+    \node[layer, below=of entity, text width=112mm] (svc) {Service layer\\{\footnotesize\mdseries\normalfont backend connection, live-update stream, update router, entity registry, model cache, credential store}};
+    \node[block, below=of svc, text width=70mm] (bk) {Data backend (e.g.\ Eclipse Ditto) \emph{or} mock};
     \draw[flow] (ui) -- (placement);
     \draw[flow] (placement) -- (entity);
     \draw[flow] (entity) -- (svc);
     \draw[biflow] (svc) -- (bk);
   \end{tikzpicture}
-  \caption[Viewer architecture: four layers]{The four layers. Data flows up from the backend through the service layer into the entity model, which produces actors; the camera, interaction, and UI layer depends only on actors and on the georeference. Backend knowledge is confined to the service layer; infrastructure-domain knowledge to the entity model's extension points.}
+  \caption[Viewer architecture: four layers]{The four layers. Data flows up from the backend through the service layer into the entity model, which produces entities in the scene; the camera, interaction, and UI layer depends only on those entities and on the globe. Backend knowledge is confined to the service layer; infrastructure-domain knowledge to the entity model's extension points.}
   \label{fig:arch-overview}
 \end{figure}
 
-The guiding rule is that knowledge of the data backend lives only in the service layer, and knowledge of specific infrastructure domains lives only behind the entity model's extension points. Everything else -- rendering, selection, the camera, the coordinate math, the tile-streaming loop -- is written against generic abstractions (an actor, a \textit{thing} identifier, a latitude/longitude pair) and does not change when a new entity type is added or the backend is swapped.
+The guiding rule is that data-backend knowledge lives only in the service layer, and infrastructure-domain knowledge lives only behind the entity model's extension points. Everything else, meaning rendering, selection, the camera, the coordinate maths, and the loop that decides which entities to load, is written against generic abstractions (an entity, an entity identifier, a latitude/longitude pair) and does not change when a new entity type is added or the backend is swapped.
 
 \section{Service Layer}
 \label{sec:service-layer}
 
-Every external dependency is encapsulated in an Unreal Engine \texttt{GameInstanceSubsystem} -- a singleton that the engine creates automatically, keeps alive across level loads, and exposes to the rest of the application through a typed interface. Splitting these responsibilities across small single-purpose subsystems, rather than a single monolithic client, means each concern can be reasoned about, replaced, or mocked in isolation.
+Every external dependency is encapsulated in its own long-lived service, created when the application starts, kept alive for the whole session, and exposed to the rest of the application through a typed interface. Splitting these responsibilities across small, single-purpose services, rather than a single monolithic client, means each concern can be reasoned about, replaced, or mocked in isolation.
 
-\subsection{The Subsystems}
+\subsection{Components}
 
-\begin{description}
-    \item[\texttt{UDittoService}] The REST client for the data backend. It handles authentication (OAuth2 password grant against a Keycloak endpoint, with HTTP Basic as a fallback), proactive token refresh, and paginated retrieval of \textit{things} (200 per page), including tile-scoped queries expressed as quadkey ranges. API calls issued before authentication completes are queued and flushed automatically once a token is available, so the rest of the application never has to reason about login timing.
-    \item[\texttt{UWSService}] The lifecycle of the single persistent WebSocket used for live updates. It defers connecting until \texttt{UDittoService} signals that authentication is ready, sends the backend's stream-start message on connect, and reconnects with exponential back-off (up to a fixed retry count) when the connection drops unexpectedly. Consumers subscribe to connected/message/error/closed delegates instead of touching the socket.
-    \item[\texttt{UEntityUpdateDaemon}] The router between the raw event stream and the world. It parses each backend envelope into a \texttt{(thingId, path, value)} triple and dispatches it to the actor registered for that \texttt{thingId}. Events for a \texttt{thingId} with no registered actor are raised on a separate delegate, letting the streaming layer decide whether to fetch and spawn that entity on demand.
-    \item[\texttt{UActorRegistryService}] A global \texttt{thingId}~$\rightarrow$~actor map. Actors add themselves on \texttt{BeginPlay} and remove themselves on \texttt{EndPlay}; every system that needs to locate an actor by identifier -- the update daemon, the UI, the tile-refresh logic -- queries this service instead of iterating world actors. It also supports prefix queries, used for example to find an instrument's child entities.
-    \item[\texttt{UCredentialStoreService}] Persistence of login credentials through a platform-specific secure-storage backend (Windows DPAPI or macOS Keychain Services). Only the host, username, and password are stored; short-lived OAuth tokens are deliberately not persisted and are re-derived on each launch, which is what lets a session remain valid until the user explicitly logs out. On a platform with no backend implemented, loading simply fails and the login screen is shown every launch.
-    \item[\texttt{UGlbModelService}] Downloading, on-disk caching (keyed by HTTP ETag), and runtime parsing of glTF binary models referenced by entities, including splitting a multi-mesh model into individually addressable named layers.
-    \item[\texttt{UCoordinatesConversionService}] Geographic-to-world coordinate conversion, described in Section~\ref{sec:geospatial-placement}.
-\end{description}
+The service layer is made up of seven services, which fall into three groups according to what they do for the rest of the application. Figure~\ref{fig:service-layer} shows them, how they communicate, and where the boundary with the backend lies.
 
-\subsection{Communication Between Subsystems}
+\begin{figure}[t]
+  \centering
+  \begin{tikzpicture}[every node/.style={font=\small}]
+    % backend-facing services
+    \node[block, text width=23mm] (cred)   at (0,0)    {credential\\store};
+    \node[block, text width=23mm] (conn)   at (32mm,0) {backend\\connection};
+    \node[block, text width=23mm] (ws)     at (64mm,0) {live-update\\stream};
+    \node[block, text width=23mm] (router) at (96mm,0) {update\\router};
+    % services that support the scene
+    \node[block, text width=23mm] (reg)    at (32mm,17mm) {entity\\registry};
+    \node[block, text width=23mm] (cache)  at (64mm,17mm) {model\\cache};
+    \node[block, text width=23mm] (coord)  at (96mm,17mm) {coordinate\\conversion};
+    % backend-specific interfaces
+    \node[seam, text width=23mm, minimum height=2.2em, inner sep=5pt, fill=white] (iauth)  at (32mm,-17mm) {authentication\\\& records};
+    \node[seam, text width=23mm, minimum height=2.2em, inner sep=5pt, fill=white] (iproto) at (64mm,-17mm) {connection\\protocol};
+    \node[seam, text width=23mm, minimum height=2.2em, inner sep=5pt, fill=white] (iparse) at (96mm,-17mm) {message\\decoding};
 
-The subsystems communicate with each other through delegates rather than direct calls where timing matters. \texttt{UWSService} listens for \texttt{UDittoService}'s ``authentication ready'' broadcast rather than polling it; \texttt{UEntityUpdateDaemon} subscribes to \texttt{UWSService}'s message delegate. Connection settings that more than one subsystem needs (host, protocol, the stream-start message) are read from \texttt{UDittoService}'s getters by the others, so there is a single interpretation of that configuration in the running application rather than each subsystem parsing it independently and potentially drifting.
+    \draw[biflow] (cred) -- (conn);
+    \draw[flow] (conn) -- (ws);
+    \draw[flow] (ws) -- (router);
+    \draw[thick] (conn) -- (iauth);
+    \draw[thick] (ws) -- (iproto);
+    \draw[thick] (router) -- (iparse);
+
+    \begin{scope}[on background layer]
+      \node[draw, rounded corners=3pt, fill=black!6, inner sep=4mm,
+            fit=(cred)(reg)(coord)(iauth)(iparse),
+            label={[font=\small\bfseries, anchor=north west, inner sep=6pt]north west:Service layer}] (svc) {};
+    \end{scope}
+
+    \node[layer, text width=110mm, above=7mm of svc] (top) {Entity model, camera \& UI};
+    \draw[flow] (svc.north) -- node[right, font=\footnotesize]{records, \emph{(identifier, path, value)} triples, events} (top.south);
+
+    \node[block, text width=110mm, below=7mm of svc] (bk) {Data backend (e.g.\ Eclipse Ditto)};
+    \draw[biflow] (iauth.south)  -- (iauth.south  |- bk.north);
+    \draw[biflow] (iproto.south) -- (iproto.south |- bk.north);
+    \draw[biflow] (iparse.south) -- (iparse.south |- bk.north);
+  \end{tikzpicture}
+  \caption[The service layer and the backend boundary]{The service layer and the backend boundary. The backend connection announces when authentication is ready, the live-update stream then connects and passes incoming messages to the update router, and the credential store supplies and keeps the user's login. Only the three dashed interfaces know the backend's protocol and formats, each with one implementation for Eclipse Ditto; everything above the service layer receives records, \emph{(identifier, path, value)} triples, and events.}
+  \label{fig:service-layer}
+\end{figure}
+
+Three services handle the connection to the backend. The \emph{backend connection} owns authentication, the credentials attached to each request, and access to the backend's records, including requests limited to a geographic area; requests made before authentication completes are queued and sent once it does, so the rest of the application never has to reason about login timing. The \emph{credential store} keeps the user's login details in the operating system's secure storage, so a stored login remains usable until the user logs out, while short-lived access tokens are never stored. The \emph{live-update stream} maintains the single persistent connection over which the backend pushes changes: it connects only once authentication is ready, reconnects automatically if the connection drops, and lets other components subscribe to its events instead of handling the connection themselves.
+
+Two services connect those changes to the scene. The \emph{update router} turns each incoming message into a generic \emph{(identifier, path, value)} triple and delivers it to the entity it concerns; messages for an entity that is not currently in the scene are reported separately, so the streaming logic can decide whether to fetch and create it. The \emph{entity registry} maps identifiers to the entities currently in the scene, so any component that needs an entity asks the registry instead of searching the scene; prefix lookups make it possible, for example, to find the instruments that belong to an asset.
+
+The last two support the scene itself. The \emph{model cache} downloads the 3D models that entities refer to, caches them on disk, and loads them at runtime, and the \emph{coordinate conversion} service turns geographic coordinates into positions in the scene, as described in Section~\ref{sec:geospatial-placement}.
+
+\subsection{Communication Between Services}
+
+The services communicate through events rather than direct calls wherever timing matters: the live-update stream waits for the backend connection to announce that authentication is ready instead of polling it, and the update router listens to the stream's message events. Connection settings that several services need are read from a single place, so the running application has one interpretation of that configuration rather than several that could drift apart.
 
 \subsection{The Backend Boundary}
 
-Nothing above the service layer names an HTTP verb, a URL, an OAuth scope, a WebSocket frame, or the backend's envelope format. The entity model receives parsed JSON objects and \texttt{(thingId, path, value)} triples; the camera and UI receive actors and delegate broadcasts. Replacing the backend, or substituting a mock that replays recorded traffic for offline development, is therefore a change confined to this layer.
+Nothing above the service layer knows the backend's addresses, its authentication scheme, its transport, or the format of its messages. The entity model receives parsed records and \emph{(identifier, path, value)} triples; the camera and UI receive entities and events. Replacing the backend, or substituting a mock that replays recorded traffic for offline development, is therefore a change confined to this layer.
 
-\section{Entity Model and Generalization}
+Within that layer, the genuinely backend-specific pieces (authentication and record access, the live connection's protocol, and decoding one live-update message) sit behind their own small interfaces rather than inside the services directly (the dashed boxes in Figure~\ref{fig:service-layer}), each currently with one implementation, for Eclipse Ditto (Section~\ref{sec:impl-backend-interface}). Each service owns its implementation the same way the entity model owns an extension or a behaviour component: created once, held through a generic interface, with the owner unaware of what the owned object actually does. This is the same seam-per-axis-of-variation principle from Section~\ref{sec:design-rationale}, applied a second time inside the service layer rather than at its boundary.
+
+\section{Entity Model and Generalisation}
 \label{sec:entity-model}
 
-The entity model is where generalization across infrastructure types is concentrated. A backend \textit{thing} is a JSON document with an identifier, a set of attributes, and optionally a set of features; the viewer's job is to turn each one into an actor in the world that renders sensibly, shows the right information when selected, and updates live. The design goal is that adding a new kind of infrastructure requires touching exactly one table and, at most, adding one small self-contained class, never modifying the spawn pipeline, the update loop, or the rendering code.
+The entity model concentrates generalisation across infrastructure types. A backend record is a structured document with an identifier, a set of attributes, and optionally a set of features; the viewer's job is to turn each one into an entity in the scene that renders sensibly, shows the right information when selected, and updates live. The design goal is that adding a new kind of infrastructure requires touching exactly one table and, at most, adding one small self-contained extension, never modifying the creation pipeline, the update loop, or the rendering code.
 
-At the time of writing, roughly thirty entity types are registered -- vehicles, weather stations, toll plazas and toll cameras, several classes of road marking, lighting, signs, gantries, kilometre markers, drainage, retaining structures, bridges, four kinds of telematics equipment, generic geo-assets and their instruments, and fire ignition points. All but one are handled without any bespoke rendering or update code.
+\subsection{The Generic Entity}
 
-\subsection{The World Actor}
+Every entity in the scene, regardless of type, is an instance of the same generic entity. It is created from two things: a schema describing the expected shape of the entity's data, and the raw record received from the backend, which remains the authoritative state. The entity anchors itself to its geographic position on the globe, registers with the update router to receive live changes and with the entity registry so it can be found, and shows hover and selection visually when the interaction layer reports them.
 
-Every entity is represented by a single actor class, \texttt{ATempUIActor}, regardless of type. On spawn it is initialised with a schema (an Unreal \texttt{USTRUCT} describing the expected JSON shape) and the raw JSON payload. The raw JSON is kept as the authoritative state; a reflected struct instance is kept in sync with it for convenient typed access. The actor carries a Cesium globe-anchor component that pins it to its geographic position through the engine's origin rebasing, a collision volume for cursor hover, and a mesh. It registers with \texttt{UEntityUpdateDaemon} to receive live patches and with \texttt{UActorRegistryService} so it can be found by identifier. Interaction state (hover, selection) is reflected onto every primitive component through custom depth-stencil values, driven by the selection subsystem's delegates.
-
-Crucially, this actor has no per-type branching. It does not know what a toll camera or a weather station is. Everything type-specific reaches it through the mechanisms below.
+Crucially, the generic entity has no per-type branching. It does not know what a toll camera or a weather station is. Everything type-specific reaches it through the mechanisms below.
 
 \subsection{The Registration Table}
 
-There is one function, \texttt{RegisterAllEntityTypes}, that is the single point of contact for adding an entity type. Each call registers a type key (a substring matched against the \texttt{thingId}), the \texttt{USTRUCT} schema for its JSON, a display name for the type picker, a flag for whether the backend has server-side handling for it, an optional default mesh, and an optional extension class. Listing~\ref{lst:register} shows a representative slice.
-
-\begin{lstlisting}[style=cpp,float=t,caption={[The entity-type registration table]A representative slice of \texttt{RegisterAllEntityTypes}. The table is the one place to touch when adding a type, and is kept in its own translation unit so that adding a type does not pull every entity's headers into the factory's compilation.},label={lst:register}]
-void RegisterAllEntityTypes(UDT4MOBEntityFactory& Factory)
-{
-    Factory.RegisterType("meteo", FMeteorologyData::StaticStruct(),
-                         TEXT("Meteo Station"), true, FString(),
-                         UMeteoExtension::StaticClass());
-    Factory.RegisterType("traci", FCarData::StaticStruct(),
-                         TEXT("Vehicle"), true, FString(),
-                         UVehicleExtension::StaticClass());
-    Factory.RegisterType("tolls:toll", FTollData::StaticStruct(),
-                         TEXT("Toll Plaza"), true, FString(),
-                         UTollExtension::StaticClass());
-    // ".instrument." is more specific than "geo-asset" and wins via longest-match
-    Factory.RegisterType(".instrument.", FGeoInstrumentData::StaticStruct(),
-                         TEXT("Geo Instrument"), true, FString(),
-                         UGeoInstrumentExtension::StaticClass());
-    Factory.RegisterType("fire:", FIgnitionPointData::StaticStruct(),
-                         TEXT("Ignition Point"), false, FString(),
-                         UIgnitionPointExtension::StaticClass());
-    // ... ~25 more types
-}
-\end{lstlisting}
-
-At runtime, \texttt{UDT4MOBEntityFactory} matches an incoming \texttt{thingId} against the registered keys -- longest match wins, so a more specific key such as \texttt{.instrument.} takes precedence over a broader \texttt{geo-asset} -- selects the corresponding schema, and spawns an \texttt{ATempUIActor}. A \texttt{thingId} that matches no key is written to a log file for later inspection and otherwise ignored, so an unrecognised entity is a diagnostic event, not a crash or a silent drop with no trace.
+The registration table is the one place where the application lists the entity types it knows. Each entry associates a type key, matched against the entity's identifier, with a schema for its data, a display name, an optional default 3D model, and an optional extension (below). When a new record arrives, the entity factory matches its identifier against the registered keys, with the most specific match winning, selects the corresponding schema, and creates a generic entity. An identifier that matches no key is logged for later inspection and otherwise ignored, so an unrecognised entity is a diagnostic event, not a crash or a silent drop.
 
 \subsection{Stateless Per-Type Behaviour: Extensions}
 
-Most types are fully described by their table entry. When a type needs behaviour the table cannot express, it registers a subclass of \texttt{UEntityTypeExtension} -- a single shared instance per type, with a default implementation of every hook that matches the generic pipeline's fallback. The hooks cover:
+Most types are fully described by their table entry. When a type needs behaviour the table cannot express, it registers an \emph{extension}: a single shared object per type that answers a fixed set of questions, each with a default answer matching the generic behaviour.
 
-\begin{itemize}
-  \item the badge colour and label used in outline rows and entity windows;
-  \item the default set of info-panel fields;
-  \item the JSON body to PUT to the backend when the user places a new instance of the type;
-  \item whether the type should be fetched in full rather than by tile, and with what filter;
-  \item whether to monitor live-update cadence and warn on stalls;
-  \item a per-entity staleness timeout, replacing the backend's shared expiry timestamp;
-  \item whether the reflected struct needs re-syncing on every live patch, or only once at initialisation;
-  \item whether an actor of this type may be spawned on demand from a live event rather than only by a tile fetch;
-  \item an optional behaviour-component class (below).
-\end{itemize}
+Some of these questions concern presentation: the badge colour and label used in entity lists and information windows, the default set of fields shown in the information panel, and the initial data sent to the backend when the user places a new instance of the type. Others concern how entities of the type are loaded and kept current: whether the type should be fetched in full rather than by geographic area, and with what filter; whether an entity may be created on demand from a live update, rather than only when its geographic area is loaded; whether to monitor the rate of live updates and warn when they stall; whether a per-entity staleness timeout should be used instead of the expiry timestamp set by the backend; and whether the entity's typed copy of its data needs refreshing on every live change, or only once when it is created. The last question is whether the type needs an optional behaviour component, described below.
 
-Listing~\ref{lst:vehicleext} shows the vehicle type's extension, which overrides five of these. The factory always returns a valid extension -- a shared generic default for types that registered none -- so callers never branch on ``does this type have custom behaviour''.
-
-\begin{lstlisting}[style=cpp,float=t,caption={[The vehicle type's extension]\texttt{UVehicleExtension}. Each override is a self-contained policy decision for one type, colocated in that type's directory; none of it appears in the generic spawn or update code.},label={lst:vehicleext}]
-UCLASS()
-class DT4MOB_API UVehicleExtension : public UEntityTypeExtension
-{
-    GENERATED_BODY()
-public:
-    virtual TArray<FInfoField> GetDefaultInfoFields() const override;
-    virtual FLinearColor GetBadgeColor() const override;
-    virtual FString GetBadgeLabel(const FString& TypeKey) const override;
-
-    virtual bool ShouldMonitorUpdateCadence() const override { return true; }
-
-    // Position is read straight from RawJson; skip the per-message reflection walk.
-    virtual bool NeedsStructSyncOnLiveUpdate() const override { return false; }
-
-    // TRACI stamps every vehicle in a run with one shared expiry_ts; use a
-    // per-vehicle staleness timeout instead so the fleet does not vanish at once.
-    virtual float LiveStalenessTimeoutSeconds() const override { return 60.f; }
-
-    // New vehicles can appear while the camera sits still, so the live event
-    // is the only channel that catches them.
-    virtual bool AllowsOnDemandSpawnFromWS() const override { return true; }
-};
-\end{lstlisting}
+Each question exists because some concrete type needed it rather than as speculative flexibility: the staleness timeout exists so that a simulated vehicle whose latest update arrives late is not removed while still active (Section~\ref{sec:impl-ttl}), and on-demand creation exists because a new vehicle can appear while the camera sits still, so only the live update stream will ever see it. The vehicle type's extension answers several of these questions differently from the defaults, among them the staleness timeout and on-demand creation. The factory always provides an extension, a shared generic default for types that registered none, so no part of the application ever has to check whether a type has custom behaviour.
 
 \subsection{Stateful Per-Instance Behaviour: Behaviour Components}
 
-Some types need live per-\textit{instance} state -- fetched GeoJSON geometry, resolved model URLs, a parsed vertex list, a simulation's current exclusion area. A shared extension cannot hold that. For these, the extension returns a \texttt{UEntityBehaviorComponent} subclass, and \texttt{ATempUIActor} attaches one instance of it to each actor of that type, generically -- the actor still has no idea what the component does. The component receives lifecycle callbacks after initialisation and after every live data change, and can override narrow points of the actor's default behaviour (for instance, taking over model loading, or supplying precise terrain-exclusion polygons instead of the default convex hull of the mesh). Chapter~\ref{chap:implementation}, Section~\ref{sec:impl-special}, walks through the one type that uses this rung.
+Some types need live per-\emph{instance} state, such as fetched geometry, resolved model locations, or a simulation's current area. A shared extension cannot hold that. For these types, the extension provides a \emph{behaviour component}, and the generic entity attaches one to each entity of that type without knowing what it does. The component is notified when the entity is created and after every live change, and it can take over narrow parts of the entity's default behaviour, for instance loading its own models or supplying precise areas to cut out of the terrain. Section~\ref{sec:impl-special} describes the fire type, the one entity type that uses this tier.
 
-\subsection{Why This Layering}
+\subsection{Layering Rationale}
 
-The three tiers -- table entry, stateless extension, stateful component -- form an escalating ladder of specificity. A type uses only as much of it as it needs, and the large majority stop at the first rung. Every rung lives in the type's own directory and is opt-in; none of them require edits to the generic spawn, update, or render paths. This is the concrete mechanism by which the viewer generalises: the set of supported infrastructure types is data plus a handful of small isolated classes, not a cross-cutting concern.
+The three tiers, meaning the table entry, the stateless extension, and the stateful component, form an escalating ladder of specificity. A type uses only what it needs, and most stop at the first tier. Each tier belongs to the type itself and is opt-in; none requires changes to the generic creation, update, or rendering paths. This is the concrete mechanism by which the viewer generalises: the set of supported infrastructure types is data plus a handful of small, isolated extensions, not a concern spread across the application.
 
 \subsection{The Live Update Path}
 \label{sec:live-update-path}
 
-Once actors exist, live updates flow through a fixed path, shown in Figure~\ref{fig:live-update}. The backend sends a Ditto envelope over the WebSocket; \texttt{UEntityUpdateDaemon} parses it into a \texttt{thingId}, a \texttt{path}, and a value, and looks up the target actor. The \texttt{path} is passed through verbatim and tells the actor what changed without it having to diff JSON:
+Once entities exist, live changes follow a fixed path, shown in Figure~\ref{fig:live-update}. The backend pushes a message over the live-update stream; the update router decodes it into an identifier, a path, and a value, and finds the target entity. The path tells the entity what changed without it having to compare whole records: it may denote a full replacement of the record, a change to one attribute (commonly its position), or a change to one property of a feature.
 
-\begin{itemize}
-  \item \texttt{path = "/"} -- a full replacement of the thing object;
-  \item \texttt{path = "/attributes/\ldots"} -- a change to an attribute subtree, commonly the position;
-  \item \texttt{path = "/features/<name>/properties/\ldots"} -- a change to one feature property.
-\end{itemize}
-
-The actor patches its authoritative raw JSON at that path, optionally re-syncs the reflected struct (unless the type opts out for performance), updates its world position through the coordinate seam if the coordinates changed, notifies any behaviour component, and broadcasts a data-changed delegate that the UI binds to.
+The entity updates its authoritative data at that path, refreshes its typed copy unless its type opts out for performance, moves itself through the coordinate seam if its coordinates changed, notifies its behaviour component if it has one, and announces the change so that any open information window refreshes.
 
 \begin{figure}[t]
   \centering
   \begin{tikzpicture}[node distance=7mm, every node/.style={font=\small}]
-    \node[block, minimum width=30mm] (bk) {backend};
-    \node[block, right=of bk, minimum width=26mm] (ws) {\texttt{UWSService}};
-    \node[block, right=of ws, minimum width=36mm] (daemon) {\texttt{UEntityUpdateDaemon}\\[-1pt]{\footnotesize parse + route}};
-    \node[block, below=10mm of daemon, minimum width=36mm] (actor) {\texttt{ATempUIActor}\\[-1pt]{\footnotesize patch RawJson @ path}};
-    \node[block, left=of actor, minimum width=26mm] (coord) {coordinate\\seam};
-    \node[block, below=8mm of actor, minimum width=36mm] (ui) {behaviour comp.\ + UI\\[-1pt]{\footnotesize data-changed broadcast}};
+    \node[block, minimum width=26mm] (bk) {backend};
+    \node[block, right=12mm of bk, minimum width=30mm] (ws) {live-update\\stream};
+    \node[block, right=12mm of ws, minimum width=34mm] (daemon) {update router\\[-1pt]{\footnotesize parse + route}};
+    \node[block, below=16mm of daemon, minimum width=34mm] (actor) {entity\\[-1pt]{\footnotesize update data at path}};
+    \node[block, left=22mm of actor, minimum width=26mm] (coord) {coordinate\\seam};
+    \node[block, below=14mm of actor, minimum width=34mm] (ui) {behaviour comp.\ + UI\\[-1pt]{\footnotesize change announced}};
 
-    \draw[flow] (bk) -- node[above]{\footnotesize envelope} (ws);
+    \draw[flow] (bk) -- node[above,font=\scriptsize]{message} (ws);
     \draw[flow] (ws) -- (daemon);
-    \draw[flow] (daemon) -- node[right]{\footnotesize (thingId, path, value)} (actor);
-    \draw[flow] (actor) -- node[above]{\footnotesize if coords changed} (coord);
+    \draw[flow] (daemon) -- node[right,font=\scriptsize,align=left]{(identifier,\\path, value)} (actor);
+    \draw[flow] (actor) -- node[above,font=\scriptsize]{if coords changed} (coord);
     \draw[flow] (actor) -- (ui);
   \end{tikzpicture}
-  \caption[The live update path]{The live update path. The daemon is the only component that understands the backend's envelope format; from the \texttt{(thingId, path, value)} triple onward everything is generic.}
+  \caption[The live update path]{The live update path. The update router is the only component that understands the backend's message format; from the \emph{(identifier, path, value)} triple onward, everything is generic.}
   \label{fig:live-update}
 \end{figure}
 
 \section{Geospatial Placement}
 \label{sec:geospatial-placement}
 
-Placing content on the Earth at real-world scale is handled through Cesium for Unreal~\cite{cesiumforunreal}, which provides a full WGS84 globe inside the engine and streams terrain and imagery indexed by the 3D~Tiles standard~\cite{ogc3dtiles} (Section~\ref{sec:geospatial-vis}). Rather than let every actor call into Cesium's georeference directly, all conversion from geographic coordinates (latitude, longitude, altitude) to engine world positions goes through one service, \texttt{UCoordinatesConversionService}, which performs the WGS84~$\rightarrow$~ECEF step itself and delegates the final ECEF~$\rightarrow$~world step to the scene's \texttt{CesiumGeoreference}.
+Placing content on the Earth at real-world scale is handled through Cesium for Unreal~\cite{cesiumforunreal}, which provides a full WGS84 globe inside the engine and streams terrain and imagery indexed by the 3D~Tiles standard~\cite{ogc3dtiles} (Section~\ref{sec:geospatial-vis}). Rather than letting every entity work with the globe's georeference directly, all conversion from geographic coordinates (latitude, longitude, altitude) to positions in the scene goes through a single coordinate-conversion service, which performs the WGS84~$\rightarrow$~ECEF step itself and delegates the final ECEF~$\rightarrow$~scene step to the globe (both coordinate systems are introduced in Section~\ref{sec:geospatial-vis}).
 
-Concentrating the conversion in a single seam has three benefits. First, the transform -- and any future change to it, such as switching between an ellipsoidal and a local tangent-plane model -- is defined in exactly one place. Second, actors depend on a small stable interface (``give me the world position for this lat/lon'') instead of on Cesium's API surface, so the choice of globe plugin is itself replaceable. Third, the many call sites that need placement -- initial spawn, live position patches, the entity-placement tool, camera framing -- are guaranteed to agree, because they all call the same function. Terrain height sampling, which the engine performs asynchronously and which returns nothing until the relevant tiles have streamed in, is also mediated here so that callers handle ``height not yet known'' uniformly.
+Concentrating the conversion in a single seam has three benefits. First, the transform, and any future change to it such as switching between an ellipsoidal and a local tangent-plane model, is defined in exactly one place. Second, entities depend on a small, stable interface (``give me the scene position for this lat/lon'') instead of the globe plugin's own interface, so the choice of globe plugin is replaceable. Third, the many places that need placement, such as entity creation, live position changes, the entity-placement tool, and camera framing, are guaranteed to agree, because they all use the same conversion. Terrain height sampling is also mediated here. The globe answers height queries asynchronously against the loaded terrain: it returns nothing until the relevant tiles have streamed in at the required level of detail, so a request made the instant an entity is created can legitimately have no answer yet. Routing every height query through this one seam means every caller, from initial placement to live position changes and the entity-placement tool, handles ``height not yet known'' the same way, typically by deferring placement briefly and asking again, rather than each caller inventing its own fallback.
 
 \section{Design Rationale}
 \label{sec:design-rationale}
 
-The architecture rests on a single principle applied at two boundaries: \textit{separate what varies from what stays the same, and give each axis of variation exactly one seam}.
+The architecture rests on a single principle applied at two boundaries: separate what varies from what stays the same, and give each axis of variation exactly one seam.
 
-The data backend varies -- credentials, wire protocol, authentication scheme, pagination, the live-event envelope format. All of it is contained in the service layer, behind subsystem interfaces expressed in the application's own terms (a \textit{thing}, an update to a path, a world position). No rendering, interaction, or camera code names the backend or its formats. The backend can therefore be replaced, or stubbed for offline development and testing, without the rest of the application being aware.
+The data backend varies: credentials, protocol, authentication scheme, pagination, the format of live updates. The service layer contains all of it, behind interfaces expressed in the application's own terms (a record, an update to a path, a position). No rendering, interaction, or camera code names the backend or its formats. The backend can therefore be replaced, or stubbed for offline development and testing, without the rest of the application being aware.
 
-The infrastructure domain varies -- what an entity is, how it looks, what it means to select it, how it behaves over time. All of it is contained behind the entity model's registration table and its two extension points. The spawn pipeline, the live-update loop, the selection system, and the renderer are written once against a single actor abstraction.
+The infrastructure domain varies: what an entity is, how it looks, what it means to select it, how it behaves over time. All of it is contained behind the entity model's registration table and its two extension points. The creation pipeline, live-update loop, selection system, and renderer are written once against a single generic entity.
 
-This is precisely the separation the systems surveyed in Chapter~\ref{chap:state-of-the-art} lack: in those, rendering and interaction code is written against one backend's data model, one fixed set of entity types, or both, so neither can change without changing the viewer's core. Here, both are replaceable seams. Chapter~\ref{chap:implementation} traces, through the decisions taken during development, how each seam came to be and what problems motivated it.
+This is precisely the separation the systems surveyed in Chapter~\ref{chap:state-of-the-art} lack: in those, rendering and interaction code is written against one backend's data model, one fixed set of entity types, or both, so neither can change without changing the viewer's core. Here, both are replaceable seams. Chapter~\ref{chap:implementation} describes how each seam is implemented and the concrete requirements it serves.
