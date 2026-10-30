@@ -4,7 +4,7 @@
 
 % Remove 'coverdepname' parameter to remove department name from cover pages
 % Add 'final' parameter to remove "DOCUMENTO PROVISÓRIO" from cover page
-\documentclass[12pt,a4paper,twoside,openany]{memoir}
+\documentclass[12pt,a4paper,twoside,openany,final]{memoir}
 
 %%% This file is a template for the cover of your
 %%%  thesis.
@@ -42,7 +42,12 @@
 %%% |             |   | dgeo        |
 %%% ---------------   --------------
 %% Import the UA thesis template
-\usepackage[engineering,deca]{uaThesisTemplate}
+\usepackage[arts,deti]{uaThesisTemplate}
+\makeatletter
+\def\BAR{%
+  \smash{\rlap{\textcolor[rgb]{0.776,0.667,0.859}{\vrule width 133mm height 12mm depth -10mm}}}% top stripe: Lilás
+  \smash{\rlap{\textcolor[rgb]{0.608,0.188,0.110}{\vrule width 133mm height 10mm depth  -8mm}}}}% bottom stripe: Tijolo
+\makeatother
 
 %% Optional packages for utf8 encoding and T1 fonts
 \usepackage[utf8]{inputenc}
@@ -84,7 +89,7 @@
 
 %%% Edit author's name
 %% Author's full name
-\Author{Bernardo}{Figueiredo}
+\Author{Bernardo Miguel}{Madeira de Figueiredo}
 
 %%% Edit thesis title in Portuguese
 %% Thesis Mandatory Title in Portuguese
@@ -123,7 +128,7 @@
 \Supervisor{Diogo Nuno Pereira Gomes}{associado}
 % Needed because the student (DeCA) and the supervisor (DETI) are not from the
 % same department: without it, the template would list the supervisor under DeCA.
-\SupervisorDepartment{Departamento de Eletr\'{o}nica, Telecomunica\c{c}\~{o}es e Inform\'{a}tica}
+%\SupervisorDepartment{Departamento de Eletr\'{o}nica, Telecomunica\c{c}\~{o}es e Inform\'{a}tica}
 
 %%% OPTIONAL: you can add a second supervisor.
 %%%
@@ -149,7 +154,7 @@
 %% Optional SecondSupervisor information
 % Co-supervisor. Added directly to the list because \SupervisorMember always
 % prints "Professor <category>", which does not fit a researcher.
-\listadd{\ciSupervisorMember}{, e do Doutor João Almeida, Investigador do Instituto de Telecomunicações}
+\listadd{\ciSupervisorMember}{, e do Doutor João Miguel Pereira de Almeida, Investigador auxiliar do Departamento de Eletr\'onica, Telecomunica\c c\~oes e Inform\'atica da Universidade de Aveiro}
 
 %%% Edit your degree information.
 %%%
@@ -167,11 +172,12 @@
 %% Optional Grant support texts
 % No grant support to declare.
 %\GrantText{...}{...}
+\GrantText{Este trabalho é financiado pela União Europeia / Next Generation EU, através do Programa de Recuperação e Resiliência (PRR) [Projeto n.º 10/C19-i08/2025.P2025.00153.DT4ST].}{Este trabalho é financiado por fundos nacionais através da FCT – Fundação para a Ciência e a Tecnologia, I.P., e, quando elegível, cofinanciado por fundos comunitários no âmbito do projeto/apoio UID/50008/2025 – Instituto de Telecomunicações, com o identificador DOI \url{https://doi.org/10.54499/UID/50008/2025}.}
 
 %%% Edit the Jury President information.
 %% First Member will be the President of the Jury
 % TODO: jury not assigned yet, placeholder to fill in once known
-\JuriMember{Prof. X}{professor associado da Universidade de Aveiro}
+\JuriMember{Por definir}{Por definir}
 
 %%% Repeat the above declaration for additional
 %%%  members of the jury as many times as necessary.
@@ -540,5 +546,3 @@
 \pagestyle{plain}
 \include{chapters/appendix-user-test}
 \end{document}
-
-
