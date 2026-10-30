@@ -42,7 +42,7 @@
 %%% |             |   | dgeo        |
 %%% ---------------   --------------
 %% Import the UA thesis template
-\usepackage[engineering,deti]{uaThesisTemplate}
+\usepackage[engineering,deca]{uaThesisTemplate}
 
 %% Optional packages for utf8 encoding and T1 fonts
 \usepackage[utf8]{inputenc}
@@ -121,6 +121,9 @@
 %%% -----------------------------
 %% Supervisor information
 \Supervisor{Diogo Nuno Pereira Gomes}{associado}
+% Needed because the student (DeCA) and the supervisor (DETI) are not from the
+% same department: without it, the template would list the supervisor under DeCA.
+\SupervisorDepartment{Departamento de Eletr\'{o}nica, Telecomunica\c{c}\~{o}es e Inform\'{a}tica}
 
 %%% OPTIONAL: you can add a second supervisor.
 %%%

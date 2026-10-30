@@ -43,6 +43,11 @@
 \newcommand{\Author}[2]{\def\ciAuthorFirst{#1}\def\ciAuthorLast{#2}}
 \newcommand{\Supervisor}[2]{\def\ciSupervisorName{{#1}}\def\ciSupervisorTitle{{#2}}}
 \newcommand{\Supervisora}[2]{\def\ciSupervisoraName{{#1}}\def\ciSupervisoraTitle{{#2}}}
+% Optional: main supervisor's department. Added because the template takes the
+% supervisor's department from the student's department option, which is wrong
+% when the student and the supervisor are not from the same department.
+% If not set, the student's department is used, as in the original template.
+\newcommand{\SupervisorDepartment}[1]{\def\ciSupervisorDepartment{#1}}
 \newcommand{\SupervisorMember}[5]{
     \listadd{\ciSupervisorMember}{\SUPERVISOR{#5}{#1}{#2}{#3}{#4}}
 }
@@ -514,7 +519,7 @@ da Doutora {\ciSupervisoraName}, Professora {\ciSupervisoraTitle}
 \else
 do Doutor {\ciSupervisorName}, Professor {\ciSupervisorTitle}
 \fi%
-do {\ua@textA} {\ua@textB} da Universidade de Aveiro\dolistloop{\ciSupervisorMember}.}
+do \ifdefined\ciSupervisorDepartment{\ciSupervisorDepartment}\else{\ua@textA} {\ua@textB}\fi\ da Universidade de Aveiro\dolistloop{\ciSupervisorMember}.}
     \vspace{75mm}
 \ifdefined \ciGrantFirst
     \SPONSOR{}
